@@ -4,12 +4,11 @@ TravelMind 是一个基于 LangGraph/Multi-Agent + MCP + 高德 Web 服务的智
 
 ## 运行端口
 
-本项目只使用：
+本项目使用：
 
 - MCP Server：`http://127.0.0.1:8098/my-custom-path`
 - Web App：`http://127.0.0.1:8010`
 
-不要占用或重启用户其它端口：`3001, 5173, 8000, 8081, 18736, 38440`。
 
 ## 环境要求
 
