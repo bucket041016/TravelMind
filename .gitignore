@@ -1,0 +1,57 @@
+# Python virtual environments
+/langgraph_env/
+/venv/
+/.venv/
+env/
+venv/
+
+# Python caches, tests, coverage, and local databases
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+*.db
+*.sqlite
+*.sqlite3
+
+# Node.js dependencies and build output (keep lock files committed)
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.cache/
+coverage/
+
+# Local environment variables and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Runtime logs, process files, and generated test/demo output
+*.log
+*.pid
+*.pids.txt
+/logs/
+/outputs/
+/tmp_screenshots/
+/.playwright-mcp/
+
+# IDE and editor settings
+.vscode/
+.idea/
+
+# Operating-system generated files
+.DS_Store
+Thumbs.db

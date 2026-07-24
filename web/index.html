@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TravelMind MCP Agent</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/styles.css?v=phase33" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">AI</div>
+          <div>
+            <h1>TravelMind</h1>
+            <p>Multi-Agent + MCP 智慧出行系统</p>
+          </div>
+        </div>
+
+        <section id="resultNavPanel" class="result-nav-panel" hidden>
+          <div class="panel-title">行程目录</div>
+          <button class="nav-link active" type="button" data-scroll-target="overviewSection">行程概览</button>
+          <button class="nav-link" type="button" data-scroll-target="weatherSection">天气信息</button>
+          <button class="nav-link" type="button" data-scroll-target="hotelSection">住宿匹配</button>
+          <button class="nav-link" type="button" data-scroll-target="poiSection">景点候选</button>
+          <button class="nav-link" type="button" data-scroll-target="mapSection">景点地图</button>
+          <button class="nav-link" type="button" data-scroll-target="daysSection">每日行程</button>
+          <button class="nav-link" type="button" data-scroll-target="budgetSection">预算评估</button>
+          <details class="modify-panel">
+            <summary>修改条件</summary>
+            <p>调整表单后重新规划，会生成一份新的结构化行程。</p>
+          </details>
+        </section>
+
+        <div id="inputPanels" class="input-panels">
+        <section class="panel">
+          <div class="panel-title">出行规划表单</div>
+          <form id="tripForm" class="trip-form">
+            <div class="form-grid two">
+              <label>
+                <span>出发城市</span>
+                <input id="originCity" name="originCity" type="text" value="广州" autocomplete="off" required />
+              </label>
+              <label>
+                <span>目的地城市</span>
+                <input id="destinationCity" name="destinationCity" type="text" value="深圳" autocomplete="off" required />
+              </label>
+            </div>
+
+            <div class="form-grid two">
+              <label>
+                <span>旅行日期</span>
+                <input id="travelDate" name="travelDate" type="date" required />
+              </label>
+              <label>
+                <span>预算</span>
+                <input id="budget" name="budget" type="number" min="0" step="100" value="800" required />
+              </label>
+            </div>
+
+            <div class="form-grid two">
+              <label>
+                <span>天数</span>
+                <input id="days" name="days" type="number" min="1" max="14" value="2" required />
+              </label>
+              <label>
+                <span>人数</span>
+                <input id="travelers" name="travelers" type="number" min="1" max="20" value="1" required />
+              </label>
+            </div>
+
+            <fieldset>
+              <legend>偏好</legend>
+              <div class="choice-grid">
+                <label><input type="checkbox" name="interests" value="经典景点" checked />经典景点</label>
+                <label><input type="checkbox" name="interests" value="美食" checked />美食</label>
+                <label><input type="checkbox" name="interests" value="地方特色" checked />地方特色</label>
+                <label><input type="checkbox" name="interests" value="拍照" />拍照</label>
+                <label><input type="checkbox" name="interests" value="博物馆" />博物馆</label>
+                <label><input type="checkbox" name="interests" value="海边" />海边</label>
+                <label><input type="checkbox" name="interests" value="轻松" />轻松</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>旅行节奏</legend>
+              <div class="segmented">
+                <label><input type="radio" name="pace" value="轻松" />轻松</label>
+                <label><input type="radio" name="pace" value="标准" checked />标准</label>
+                <label><input type="radio" name="pace" value="紧凑" />紧凑</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>单段交通容忍</legend>
+              <div class="segmented">
+                <label><input type="radio" name="maxTransferMinutes" value="30" checked />30 分钟</label>
+                <label><input type="radio" name="maxTransferMinutes" value="45" />45 分钟</label>
+                <label><input type="radio" name="maxTransferMinutes" value="60" />60 分钟</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>住宿策略</legend>
+              <div class="segmented">
+                <label><input type="radio" name="hotelStrategy" value="近景点" />近景点</label>
+                <label><input type="radio" name="hotelStrategy" value="近地铁枢纽" checked />近地铁</label>
+                <label><input type="radio" name="hotelStrategy" value="近商圈" />近商圈</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>跨城交通</legend>
+              <div class="choice-grid">
+                <label><input type="checkbox" name="intercityModes" value="高铁/动车/城际" checked />高铁/动车/城际</label>
+                <label><input type="checkbox" name="intercityModes" value="飞机航班" />飞机航班</label>
+                <label><input type="checkbox" name="intercityModes" value="自驾" checked />自驾</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>目的地内交通</legend>
+              <div class="choice-grid">
+                <label><input type="checkbox" name="localModes" value="公共交通" checked />公共交通</label>
+                <label><input type="checkbox" name="localModes" value="打车" checked />打车</label>
+                <label><input type="checkbox" name="localModes" value="步行" checked />步行</label>
+                <label><input type="checkbox" name="localModes" value="骑行" />骑行</label>
+                <label><input type="checkbox" name="localModes" value="自驾" />自驾</label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>住宿类型</legend>
+              <div class="segmented">
+                <label><input type="radio" name="hotelLevel" value="经济" />经济</label>
+                <label><input type="radio" name="hotelLevel" value="舒适" checked />舒适</label>
+                <label><input type="radio" name="hotelLevel" value="高端" />高端</label>
+              </div>
+            </fieldset>
+
+            <label class="inline-toggle">
+              <input id="requireFile" name="requireFile" type="checkbox" />
+              <span>生成 Markdown 行程文件</span>
+            </label>
+
+            <button id="planButton" class="primary-button" type="submit">开始规划</button>
+          </form>
+        </section>
+
+        <section class="panel compact-panel">
+          <div class="panel-title">快捷演示</div>
+          <button class="prompt-chip" data-prompt="我明天从福州南站去厦门北站，再到鼓浪屿玩两天。请用高德路线规划给我多个出行路线，对比驾车和公共交通，给出推荐方案、天气、景点和预算，并生成行程文件。">
+            高德多路线规划
+          </button>
+          <button class="prompt-chip" data-prompt="我周末从广州去深圳，想轻松一点，帮我安排路线、美食和预算。">
+            广州到深圳周末游
+          </button>
+          <button class="prompt-chip" data-prompt="北京明天适合去户外玩吗？如果下雨，请给我一个室内替代路线，并给出穿衣、防晒和带伞建议。">
+            天气出行建议
+          </button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">MCP 工具</div>
+          <div id="toolList" class="tool-list">
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line short"></div>
+            <div class="skeleton-line"></div>
+          </div>
+        </section>
+        </div>
+      </aside>
+
+      <main class="chat-main">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">高德 MCP 多 Agent 效果演示</div>
+            <h2>自然语言出行规划工作台</h2>
+          </div>
+          <div class="top-actions">
+            <button id="backHomeButton" class="ghost-button" type="button" hidden>返回首页</button>
+            <button id="editPlanButton" class="ghost-button" type="button" hidden>编辑行程</button>
+            <div class="export-dropdown" hidden>
+              <button id="exportButton" class="ghost-button" type="button">导出行程</button>
+              <div id="exportMenu" class="export-menu" hidden>
+                <button type="button" data-export="markdown">导出 Markdown</button>
+                <button type="button" data-export="pdf">打印/保存 PDF</button>
+              </div>
+            </div>
+            <button id="resetButton" class="icon-button" title="清空会话" aria-label="清空会话">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12a8 8 0 1 0 2.34-5.66M4 4v6h6" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section id="planningProgress" class="planning-progress" hidden>
+          <div class="progress-head">
+            <div>
+              <strong>正在生成行程</strong>
+              <span id="progressLabel">准备开始</span>
+            </div>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div id="progressSteps" class="progress-steps"></div>
+        </section>
+
+        <div class="main-tabs" role="tablist" aria-label="规划结果视图">
+          <button class="tab-button active" type="button" data-tab="result" role="tab" aria-selected="true">规划结果</button>
+          <button class="tab-button" type="button" data-tab="markdown" role="tab" aria-selected="false">方案原文</button>
+        </div>
+
+        <div id="workspaceScroll" class="workspace-scroll">
+          <section id="planResult" class="plan-result"></section>
+          <section id="markdownResult" class="markdown-result" hidden></section>
+        </div>
+      </main>
+
+      <aside class="inspector">
+        <section class="followup-panel">
+          <div class="panel-title">追问对话</div>
+          <div id="followupLog" class="followup-log" aria-live="polite">
+            <div class="empty-state">生成行程后，可以在这里继续追问或调整偏好。</div>
+          </div>
+          <form id="followupForm" class="followup-form">
+            <textarea id="followupInput" rows="3" placeholder="例如：第二天帮我改轻松一点..." required></textarea>
+            <button class="send-button" type="submit" title="发送追问" aria-label="发送追问">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m22 2-7 20-4-9-9-4Z" />
+                <path d="M22 2 11 13" />
+              </svg>
+            </button>
+          </form>
+        </section>
+        <div id="traceList" hidden></div>
+      </aside>
+    </div>
+
+    <script src="/static/app.js?v=phase33"></script>
+  </body>
+</html>
