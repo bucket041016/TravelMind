@@ -55,3 +55,6 @@ secrets/
 # Operating-system generated files
 .DS_Store
 Thumbs.db
+
+# 朋友分支的只读审计副本（嵌套仓库，禁止跟踪）
+/Gold-WC-bucket1/
