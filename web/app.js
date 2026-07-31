@@ -453,12 +453,21 @@ function buildTripPrompt() {
   const localText = payload.localModes.length ? payload.localModes.join("、") : "公共交通、打车、步行";
   const profile = payload.preferenceProfile || {};
   const learnedText = profile.learnedHints?.length ? `；已记住：${profile.learnedHints.join("、")}` : "";
+  const constraintSummary = {
+    rawText: payload.freeText || "",
+    hard: Array.isArray(payload.hardConstraints) ? payload.hardConstraints : [],
+    soft: Array.isArray(payload.softPreferences) ? payload.softPreferences : [],
+    unknown: [],
+  };
+  const hardText = constraintSummary.hard.length ? constraintSummary.hard.join("、") : "暂无显式硬约束";
+  const softText = constraintSummary.soft.length ? constraintSummary.soft.join("、") : "暂无显式软偏好";
 
   return [
     `我计划从${payload.originCity}去${payload.destinationCity}，${formatDateLabel(payload.startDate)}出发，玩${payload.days}天，${payload.travelers}人，预算${payload.budget || "未指定"}元。`,
     `旅行偏好：${payload.interests.join("、") || "经典景点"}。`,
     `跨城交通请考虑：${intercityText}。目的地内交通请考虑：${localText}。住宿选择${payload.hotelLevel}档。`,
     `节奏：${profile.pace || "标准"}；单段交通尽量控制在 ${profile.maxTransferMinutes || 45} 分钟内；住宿策略：${profile.hotelStrategy || "近地铁枢纽"}${learnedText}。`,
+    `补充要求：${constraintSummary.rawText || "未填写"}。硬约束：${hardText}。软偏好：${softText}。`,
     "请生成跨城主交通对比、酒店匹配、每日活动安排、行程详情、天气与出行建议、预算评估和推荐方案。",
   ].join("\n");
 }
@@ -475,6 +484,7 @@ function buildPlanPayload() {
   const pace = formData.get("pace") || "标准";
   const maxTransferMinutes = Number.parseInt(formData.get("maxTransferMinutes"), 10) || 45;
   const hotelStrategy = formData.get("hotelStrategy") || "近地铁枢纽";
+  const freeText = String(formData.get("freeText") || "").trim();
   const interests = getCheckedValues("interests");
   const intercityModes = getCheckedValues("intercityModes");
   const localModes = getCheckedValues("localModes");
@@ -490,6 +500,12 @@ function buildPlanPayload() {
     localModes: localModes.length ? localModes : ["公共交通", "打车", "步行"],
     hotelLevel,
     interests: interests.length ? interests : ["经典景点"],
+    freeText,
+    hardConstraints: [],
+    softPreferences: [
+      pace ? `旅行节奏：${pace}` : "",
+      hotelStrategy ? `住宿策略：${hotelStrategy}` : "",
+    ].filter(Boolean),
     preferenceProfile: {
       pace,
       maxTransferMinutes,
@@ -949,6 +965,7 @@ function renderQualityReview(review = null) {
   ];
   const issues = Array.isArray(review.issues) ? review.issues.filter((item) => item?.message).slice(0, 3) : [];
   const fixes = Array.isArray(review.fixes) ? review.fixes.filter(Boolean).slice(0, 3) : [];
+  const constraints = Array.isArray(review.constraints) ? review.constraints.filter((item) => item?.text).slice(0, 8) : [];
   return `
     <div class="quality-review">
       <div class="quality-head">
@@ -983,8 +1000,29 @@ function renderQualityReview(review = null) {
           }
         </div>
       </div>
+      <div class="quality-constraints">
+        <h4>约束检查</h4>
+        ${
+          constraints.length
+            ? constraints
+                .map(
+                  (constraint) =>
+                    `<p class="quality-issue ${escapeHtml(constraint.status || "unknown")}">${escapeHtml(constraintStatusLabel(constraint.status))}：${escapeHtml(constraint.text)}${constraint.evidence ? ` · ${escapeHtml(constraint.evidence)}` : ""}</p>`,
+                )
+                .join("")
+            : `<p>暂无逐条约束记录。</p>`
+        }
+      </div>
     </div>
   `;
+}
+
+function constraintStatusLabel(status) {
+  return {
+    satisfied: "满足",
+    violated: "未满足",
+    unknown: "待核实",
+  }[status] || "待核实";
 }
 
 function renderBudget(budget, options = {}) {
@@ -1944,6 +1982,9 @@ function buildMarkdownFromPlan(data) {
     lines.push(`- 总分：${review.overall_score ?? "待评估"}；路线：${review.route_score ?? "-"}；节奏：${review.pace_score ?? "-"}；片区：${review.cluster_score ?? "-"}；逻辑：${review.logic_score ?? "-"}。`);
     (review.issues || []).slice(0, 5).forEach((issue) => lines.push(`- 问题：${issue.day ? `第 ${issue.day} 天，` : ""}${issue.message || ""}`));
     (review.fixes || []).slice(0, 5).forEach((fix) => lines.push(`- 处理：${fix}`));
+    (review.constraints || []).slice(0, 8).forEach((constraint) => {
+      lines.push(`- 约束${constraintStatusLabel(constraint.status)}：${constraint.text || ""}${constraint.evidence ? `；证据：${constraint.evidence}` : ""}`);
+    });
   }
   lines.push("", "### 预算评估");
   lines.push(`- 预计总计：${data.budget?.total ?? "待校准"} 元；目标预算：${data.budget?.target ?? "未指定"} 元。`);

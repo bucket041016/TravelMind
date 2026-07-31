@@ -19,6 +19,9 @@ except ModuleNotFoundError:
     from sync.mcp_tools_adapter import MCPToolAdapter
 
 from .base_agent import MCPToolbox
+from .candidate_ranker import rank_candidates
+from .contracts import candidate_key
+from .fact_normalizer import normalize_place_candidates
 from .providers import FlightProvider, HotelProvider, RailProvider
 
 
@@ -286,6 +289,9 @@ class StructuredTravelPlanner:
         pois = self._record(trace, "POIAgent 景点美食", prefs, lambda: self._build_pois(prefs))
         hotels = self._record(trace, "HotelAgent 住宿匹配", prefs, lambda: self._build_hotels(prefs))
         self._enrich_place_clusters(pois, hotels)
+        candidate_contracts = self._build_candidate_contracts(prefs, pois, hotels, weather)
+        pois["candidate_contracts"] = candidate_contracts.get("pois", {})
+        hotels["candidate_contracts"] = candidate_contracts.get("hotels", [])
         local_transport = self._record(trace, "LocalMobilityAgent 目的地内交通", prefs, lambda: self._build_local_transport(prefs, routes, hotels))
         llm_plan = self._record(
             trace,
@@ -363,6 +369,7 @@ class StructuredTravelPlanner:
             "weather_advice": weather_advice,
             "map": map_data,
             "pois": pois,
+            "candidate_contracts": candidate_contracts,
             "budget": budget,
             "itinerary_days": itinerary_days,
             "quality_review": quality_review,
@@ -443,6 +450,7 @@ class StructuredTravelPlanner:
             ["transit", "taxi", "walking"],
         )
         preference_profile = self._normalize_preference_profile(payload.get("preferenceProfile") or {})
+        constraint_summary = self._normalize_constraint_summary(payload, preference_profile)
         interests = payload.get("interests") or ["经典景点", "美食", "地方特色"]
         if isinstance(interests, str):
             interests = [item for item in re.split(r"[、,，\s]+", interests) if item]
@@ -460,7 +468,126 @@ class StructuredTravelPlanner:
             "interests": list(dict.fromkeys(str(item).strip() for item in interests if str(item).strip())),
             "estimatedDistanceKm": self._estimate_distance(origin, destination),
             "preferenceProfile": preference_profile,
+            "freeText": constraint_summary["rawText"],
+            "hardConstraints": [item["text"] for item in constraint_summary["hard"]],
+            "softPreferences": [item["text"] for item in constraint_summary["soft"]],
+            "constraintSummary": constraint_summary,
         }
+
+    @classmethod
+    def _normalize_constraint_summary(
+        cls,
+        payload: dict[str, Any],
+        preference_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_text = cls._clean_constraint_text(payload.get("freeText") or payload.get("free_text"))[:1200]
+        hard = cls._constraint_entries(payload.get("hardConstraints") or payload.get("hard_constraints"), "hard", "explicit")
+        soft = cls._constraint_entries(payload.get("softPreferences") or payload.get("soft_preferences"), "soft", "explicit")
+        inferred_hard, inferred_soft, unknown = cls._infer_constraint_entries(raw_text)
+        hard.extend(inferred_hard)
+        soft.extend(inferred_soft)
+
+        max_transfer = preference_profile.get("maxTransferMinutes", 45)
+        hard.insert(
+            0,
+            {
+                "kind": "hard",
+                "text": f"单段交通尽量控制在 {max_transfer} 分钟内",
+                "source": "profile",
+                "field": "maxTransferMinutes",
+            },
+        )
+        soft.extend(
+            [
+                {
+                    "kind": "soft",
+                    "text": f"旅行节奏：{preference_profile.get('pace', '标准')}",
+                    "source": "profile",
+                    "field": "pace",
+                },
+                {
+                    "kind": "soft",
+                    "text": f"住宿策略：{preference_profile.get('hotelStrategy', '近地铁枢纽')}",
+                    "source": "profile",
+                    "field": "hotelStrategy",
+                },
+            ]
+        )
+        return {
+            "rawText": raw_text,
+            "hard": cls._dedupe_constraint_entries(hard),
+            "soft": cls._dedupe_constraint_entries(soft),
+            "unknown": cls._dedupe_constraint_entries(unknown),
+        }
+
+    @staticmethod
+    def _clean_constraint_text(value: Any) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    @classmethod
+    def _constraint_entries(cls, value: Any, default_kind: str, source: str) -> list[dict[str, str]]:
+        if isinstance(value, (str, dict)):
+            values = [value]
+        elif isinstance(value, list):
+            values = value
+        else:
+            values = []
+
+        entries: list[dict[str, str]] = []
+        for raw in values:
+            if isinstance(raw, dict):
+                text = raw.get("text") or raw.get("value") or raw.get("description")
+                kind = str(raw.get("kind") or default_kind).strip().lower()
+            else:
+                text = raw
+                kind = default_kind
+            if kind not in {"hard", "soft", "unknown"}:
+                kind = default_kind
+            for part in cls._split_constraint_text(text):
+                entries.append({"kind": kind, "text": part, "source": source})
+        return entries
+
+    @staticmethod
+    def _split_constraint_text(value: Any) -> list[str]:
+        text = StructuredTravelPlanner._clean_constraint_text(value)
+        return [part for part in re.split(r"[\r\n；;。！？!?]+", text) if part]
+
+    @classmethod
+    def _infer_constraint_entries(cls, raw_text: str) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+        hard_markers = ("必须", "务必", "不要", "不安排", "避免", "只安排", "仅安排", "最多", "至少", "不超过", "不去", "不坐", "不住", "固定")
+        soft_markers = ("希望", "想要", "喜欢", "优先", "尽量", "轻松", "慢一点", "少")
+        hard: list[dict[str, str]] = []
+        soft: list[dict[str, str]] = []
+        unknown: list[dict[str, str]] = []
+        for part in cls._split_constraint_text(raw_text):
+            if any(marker in part for marker in hard_markers):
+                hard.append({"kind": "hard", "text": part, "source": "inferred"})
+            elif any(marker in part for marker in soft_markers):
+                soft.append({"kind": "soft", "text": part, "source": "inferred"})
+            else:
+                unknown.append({"kind": "unknown", "text": part, "source": "inferred"})
+        return hard, soft, unknown
+
+    @staticmethod
+    def _dedupe_constraint_entries(entries: list[dict[str, str]]) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for entry in entries:
+            kind = str(entry.get("kind") or "unknown")
+            text = StructuredTravelPlanner._clean_constraint_text(entry.get("text"))
+            if not text or (kind, text) in seen:
+                continue
+            seen.add((kind, text))
+            result.append(
+                {
+                    **entry,
+                    "id": f"{kind}-{len(result) + 1}",
+                    "kind": kind,
+                    "text": text,
+                    "source": str(entry.get("source") or "unknown"),
+                }
+            )
+        return result
 
     @staticmethod
     def _normalize_preference_profile(value: Any) -> dict[str, Any]:
@@ -2472,6 +2599,7 @@ class StructuredTravelPlanner:
         if not review["issues"]:
             rule_review = self._rule_quality_review(prefs, repaired_days)
             review["issues"] = rule_review.get("issues", [])
+        review["constraints"] = self._evaluate_constraint_results(prefs, repaired_days)
         return {"itinerary_days": repaired_days, "quality_review": review}
 
     @staticmethod
@@ -2558,6 +2686,97 @@ class StructuredTravelPlanner:
             "repaired": False,
         }
 
+    @classmethod
+    def _evaluate_constraint_results(
+        cls,
+        prefs: dict[str, Any],
+        itinerary_days: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        summary = prefs.get("constraintSummary") or {}
+        results: list[dict[str, Any]] = []
+        for group in ["hard", "soft", "unknown"]:
+            for constraint in summary.get(group, []):
+                text = str(constraint.get("text") or "").strip()
+                if not text:
+                    continue
+                kind = str(constraint.get("kind") or group)
+                status = "unknown"
+                evidence = "约束已记录，当前结构化事实不足以完成验证。"
+
+                if constraint.get("field") == "pace":
+                    status = "satisfied"
+                    evidence = f"已使用旅行节奏：{(prefs.get('preferenceProfile') or {}).get('pace', '标准')}。"
+                elif constraint.get("field") == "hotelStrategy":
+                    status = "satisfied"
+                    evidence = f"已使用住宿策略：{(prefs.get('preferenceProfile') or {}).get('hotelStrategy', '近地铁枢纽')}。"
+                elif any(marker in text for marker in ["夜间", "晚上"]):
+                    night_activities = [
+                        item
+                        for day in itinerary_days
+                        for item in day.get("items", [])
+                        if item.get("time") == "夜间" and item.get("category") == "activity"
+                    ]
+                    if any(marker in text for marker in ["不要", "不安排", "避免", "仅"]):
+                        status = "violated" if night_activities else "satisfied"
+                        evidence = f"夜间活动项目数：{len(night_activities)}。"
+                else:
+                    count_match = re.search(r"最多\s*(\d+)\s*(?:个)?(?:真实)?(?:地点|景点|活动)", text)
+                    if count_match:
+                        limit = int(count_match.group(1))
+                        counts = [
+                            sum(
+                                1
+                                for item in day.get("items", [])
+                                if item.get("category") in {"activity", "food", "hotel"}
+                                and item.get("is_real_place")
+                            )
+                            for day in itinerary_days
+                        ]
+                        status = "satisfied" if all(count <= limit for count in counts) else "violated"
+                        evidence = f"每日真实地点数：{counts}；上限：{limit}。"
+                    else:
+                        minute_match = re.search(r"(\d+)\s*分钟", text)
+                        segments = [
+                            item.get("arrival_transport_segment")
+                            for day in itinerary_days
+                            for item in day.get("items", [])
+                            if isinstance(item.get("arrival_transport_segment"), dict)
+                        ]
+                        if minute_match and segments:
+                            limit = int(minute_match.group(1))
+                            durations = [cls._local_duration_minutes(segment) for segment in segments]
+                            durations = [duration for duration in durations if duration > 0]
+                            if durations:
+                                status = "satisfied" if max(durations) <= limit else "violated"
+                                evidence = f"已观测路线耗时：{durations} 分钟；上限：{limit} 分钟。"
+                        elif "室内" in text and any(marker in text for marker in ["只", "仅", "不要", "避免"]):
+                            activity_items = [
+                                item
+                                for day in itinerary_days
+                                for item in day.get("items", [])
+                                if item.get("category") == "activity"
+                            ]
+                            outdoor_items = [
+                                item
+                                for item in activity_items
+                                if any(marker in " ".join(str(item.get(key) or "") for key in ["title", "location", "detail"]) for marker in ["公园", "海边", "滨水", "骑行", "户外"])
+                            ]
+                            if activity_items:
+                                status = "violated" if outdoor_items else "satisfied"
+                                evidence = f"活动项目数：{len(activity_items)}；识别为室外的项目数：{len(outdoor_items)}。"
+
+                results.append(
+                    {
+                        "id": str(constraint.get("id") or f"{kind}-{len(results) + 1}"),
+                        "kind": kind,
+                        "text": text,
+                        "source": str(constraint.get("source") or "unknown"),
+                        "status": status,
+                        "evidence": evidence,
+                    }
+                )
+        return results
+
     def _rule_quality_review(self, prefs: dict[str, Any], itinerary_days: list[dict[str, Any]]) -> dict[str, Any]:
         issues = []
         max_transfer = int((prefs.get("preferenceProfile") or {}).get("maxTransferMinutes") or 45)
@@ -2598,6 +2817,7 @@ class StructuredTravelPlanner:
             "logic_score": logic_score,
             "issues": issues[:8],
             "fixes": [],
+            "constraints": self._evaluate_constraint_results(prefs, itinerary_days),
             "source": "rule_fallback",
             "repaired": False,
         }
@@ -2658,6 +2878,117 @@ class StructuredTravelPlanner:
             else:
                 day["primary_cluster"] = None
 
+    @staticmethod
+    def _candidate_exclusion_terms(prefs: dict[str, Any]) -> list[str]:
+        terms: list[str] = []
+        summary = prefs.get("constraintSummary") or {}
+        raw_values = [entry.get("text") for entry in summary.get("hard", []) if isinstance(entry, dict)]
+        for value in raw_values:
+            for part in re.split(r"[，,；;。！？!?]+", str(value or "")):
+                text = part.strip()
+                if not text or not re.search(r"不要|不安排|避免|不去|不住|不坐|排除|禁止", text):
+                    continue
+                text = re.sub(r"^(?:不要|不安排|避免|不去|不住|不坐|排除|禁止)", "", text).strip()
+                text = re.sub(r"^(?:安排|选择|前往|住在|乘坐)", "", text).strip()
+                if text:
+                    terms.append(text)
+        return list(dict.fromkeys(terms))
+
+    @staticmethod
+    def _legacy_fact_status(value: Any, default: str = "unknown") -> str:
+        text = str(value or "")
+        if "fixture" in text.lower():
+            return "fixture"
+        if "失败" in text or "降级" in text or "fallback" in text.lower():
+            return "amap_fallback"
+        return "live" if text.strip() else default
+
+    def _build_candidate_contracts(
+        self,
+        prefs: dict[str, Any],
+        pois: dict[str, Any],
+        hotels: dict[str, Any],
+        weather: dict[str, str],
+    ) -> dict[str, Any]:
+        """Build ranked candidates while leaving legacy output fields untouched."""
+
+        city = prefs["destinationCity"]
+        exclusions = self._candidate_exclusion_terms(prefs)
+        weather_text = " ".join(str(value or "") for value in (weather or {}).values())
+        seen_keys: set[str] = set()
+
+        hotel_raw = normalize_place_candidates(
+            hotels.get("candidates"),
+            city=city,
+            category="hotel",
+            source="hotel_poi",
+            provider_status=str(hotels.get("provider_status") or self._legacy_fact_status(hotels.get("raw"))),
+        )
+        hotel_result = rank_candidates(
+            hotel_raw,
+            expected_city=city,
+            preferences=prefs,
+            excluded_terms=exclusions,
+            seen_keys=seen_keys,
+            require_coordinates=True,
+            require_real_place=True,
+            limit=6,
+        )
+        hotels_selected = hotel_result["selected"]
+        for candidate in hotels_selected:
+            key = candidate_key(candidate)
+            if key:
+                seen_keys.add(key)
+        hotel_anchor = hotels_selected[0].get("location") if hotels_selected else None
+
+        rejected: dict[str, list[dict[str, Any]]] = {}
+
+        def rank_group(group_name: str, raw_items: list[dict[str, Any]] | None, limit: int) -> list[dict[str, Any]]:
+            normalized = normalize_place_candidates(
+                raw_items,
+                city=city,
+                category="food" if group_name == "foods" else "activity",
+                source="amap_poi",
+                provider_status=self._legacy_fact_status(pois.get("raw")),
+            )
+            result = rank_candidates(
+                normalized,
+                expected_city=city,
+                preferences=prefs,
+                excluded_terms=exclusions,
+                seen_keys=seen_keys,
+                require_coordinates=True,
+                require_real_place=True,
+                anchor=hotel_anchor,
+                weather=weather_text,
+                limit=limit,
+            )
+            rejected[group_name] = result["rejected"]
+            for candidate in result["selected"]:
+                key = candidate_key(candidate)
+                if key:
+                    seen_keys.add(key)
+            return result["selected"]
+
+        return {
+            "version": "travelmind-candidate-v1",
+            "source_mode": "legacy_text_compatible",
+            "pois": {
+                "attractions": rank_group("attractions", pois.get("attractions"), 12),
+                "specialty_places": rank_group("specialty_places", pois.get("specialty_places"), 8),
+                "foods": rank_group("foods", pois.get("foods"), 12),
+            },
+            "hotels": hotels_selected,
+            "rejected": {
+                **rejected,
+                "hotels": hotel_result["rejected"],
+            },
+            "notes": [
+                "候选由旧文本事实归一化而来；结构化 MCP 返回仍未切换。",
+                "无有效坐标或非真实地点候选不会进入规划脑候选集合。",
+            ],
+        }
+
     def _planning_brain_payload(
         self,
         prefs: dict[str, Any],
@@ -2670,11 +3001,19 @@ class StructuredTravelPlanner:
     ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         candidates = []
         lookup: dict[str, dict[str, Any]] = {}
+        contract_pois = pois.get("candidate_contracts") if isinstance(pois.get("candidate_contracts"), dict) else {}
+        contract_hotels = hotels.get("candidate_contracts") if isinstance(hotels.get("candidate_contracts"), list) else None
+
+        def candidate_group(group_name: str, fallback: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+            if group_name in contract_pois:
+                return list(contract_pois.get(group_name) or [])
+            return self._dedupe_pois(fallback)
+
         groups = [
-            ("activity", "amap_poi", self._dedupe_pois(pois.get("attractions"))[:12]),
-            ("activity", "amap_poi", self._dedupe_pois(pois.get("specialty_places"))[:8]),
-            ("food", "amap_poi", self._dedupe_pois(pois.get("foods"))[:12]),
-            ("hotel", "hotel_poi", self._dedupe_pois(hotels.get("candidates"))[:6]),
+            ("activity", "amap_poi", candidate_group("attractions", pois.get("attractions"))[:12]),
+            ("activity", "amap_poi", candidate_group("specialty_places", pois.get("specialty_places"))[:8]),
+            ("food", "amap_poi", candidate_group("foods", pois.get("foods"))[:12]),
+            ("hotel", "hotel_poi", (contract_hotels if contract_hotels is not None else self._dedupe_pois(hotels.get("candidates")))[:6]),
         ]
         for category, place_source, items in groups:
             for item in items:
@@ -2696,6 +3035,13 @@ class StructuredTravelPlanner:
                         "price_range": item.get("price_range"),
                         "price_note": item.get("cost_note") or "",
                         "type": item.get("type", ""),
+                        "location": item.get("location"),
+                        "source": item.get("source") or place_source,
+                        "source_meta": item.get("source_meta") or {},
+                        "is_real_place": bool(item.get("is_real_place")),
+                        "is_suggestion": bool(item.get("is_suggestion")),
+                        "validation": item.get("validation") or {},
+                        "selection": item.get("selection") or {},
                         "description": str(item.get("description") or "")[:160],
                         "cluster_id": item.get("cluster_id", ""),
                         "cluster_name": item.get("cluster_name", ""),
@@ -2703,6 +3049,13 @@ class StructuredTravelPlanner:
                     }
                 )
 
+        constraint_summary = prefs.get("constraintSummary") or {}
+        constraint_lines = [
+            f"{entry.get('kind', 'unknown')}: {entry.get('text', '')}"
+            for group in ["hard", "soft", "unknown"]
+            for entry in constraint_summary.get(group, [])
+            if entry.get("text")
+        ]
         payload = {
             "preferences": prefs,
             "intercity_transport": {
@@ -2722,6 +3075,7 @@ class StructuredTravelPlanner:
             "weather": weather,
             "weather_advice": weather_advice,
             "candidates": candidates,
+            "constraint_summary": constraint_summary,
             "cluster_guidance": [
                 "每天优先围绕 1 个 primary_cluster 安排活动，最多补充 1 个相邻片区",
                 "不要把相距很远的 cluster 硬排在同一天相邻时段",
@@ -2733,6 +3087,7 @@ class StructuredTravelPlanner:
                 "不要编造航班号、车次、实时票价、余票、酒店库存或门票库存",
                 "最后一天返程交通只作为 transfer，不要把住宿区域建议写进返程 item 的 location 或 detail",
                 "高德没有 cost 的景点/活动，只有明确可能收费时才输出正价 estimated_price_range；免费开放或无法判断收费时输出 0-0，并标注需核实",
+                *constraint_lines,
             ],
         }
         return payload, lookup
