@@ -32,6 +32,35 @@
 
 ---
 
+## [2026-08-01 11:38] Phase E 约束链路集成
+
+### 意图
+- 将已搬运但未接入的 contracts.py、fact_normalizer.py、candidate_ranker.py 三个模块集成到实际规划流程
+- 提升行程规划的数据质量（归一化）和候选排序能力（偏好匹配+天气适配+价格过滤）
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `sync/multi_agent/poi_service.py` | 修改 | 导入 fact_normalizer/candidate_ranker，新增 _normalize_and_rank_pois() 对景点/美食/特色店铺做归一化+排序 |
+| `sync/multi_agent/hotel_service.py` | 修改 | 导入 fact_normalizer/candidate_ranker，新增 _normalize_and_rank_hotels() 对酒店候选做归一化+排序 |
+| `sync/multi_agent/weather_service.py` | 修改 | 导入 fact_normalizer，新增 _normalize_weather_facts() 将原始天气文本转为结构化 WeatherFact |
+| `sync/multi_agent/structured_planner.py` | 修改 | 在 run() 中调用三个归一化/排序函数，输出新增 weather_facts 字段，兼容层绑定新函数 |
+| `tests/test_phase_e_constraints.py` | 新增 | 22 个测试覆盖 contracts/fact_normalizer/candidate_ranker 单元和集成场景 |
+
+### 验证
+- [x] 全部 29 个 .py 文件 py_compile 通过
+- [x] 全部 44 个测试通过（22 旧 + 22 新，零回归）
+- [ ] 已提交到 Ay 分支
+
+### 备注
+- 设计为非侵入式：归一化和排序作为后处理步骤追加，不改变 _build_pois/_build_hotels/_build_weather 的原有输入输出
+- 每个 POI/酒店候选现在携带 source_meta（数据来源可信度）、validation（字段完整性检查）、selection（排序分数和理由）
+- candidate_ranker 会根据天气自动降权不适合的候选（如雨天降权户外公园/海边）
+- candidate_ranker 会根据用户偏好兴趣做匹配加分，有坐标和评分的候选自动加权
+- 下一步：UI 重设计，或前端展示 source_meta/selection 排序理由
+
+---
+
 ## [2026-08-01 11:24] Phase D 模块化修复 + 文档清理
 
 ### 意图
@@ -47,15 +76,12 @@
 | `sync/multi_agent/hotel_service.py` | 修改 | _estimate_hotel_price_ranges 从 self 依赖改为显式 deepseek_brain 参数 |
 | `sync/multi_agent/*.py` | 修改 | 批量清理模块级函数中遗留的 self/cls 参数，解决循环导入 |
 | `tests/test_travelmind_regression.py` | 修改 | 适配纯函数调用方式，在调用中传入 toolbox/deepseek_brain |
-| `HANDOFF.md` | 删除 | 朋友的交接文档，不属于 Ay 分支 |
-| `MULTI_AGENT_UPGRADE.md` | 删除 | 朋友的升级笔记，不属于 Ay 分支 |
-| `PRODUCT_UPGRADE_PLAN.md` | 删除 | 朋友的产品升级计划，不属于 Ay 分支 |
-| `TRAVELMIND_README.md` | 删除 | 朋友的项目 README，不属于 Ay 分支（保留原始 README.md） |
+
 
 ### 验证
 - [x] 全部 27 个 .py 文件 py_compile 通过
 - [x] 全部 22 个测试通过（从 14 失败降到 0 失败）
-- [ ] 已提交到 Ay 分支
+- [x] 已提交到 Ay 分支
 
 ### 备注
 - 测试失败的三个根因：1) 系统 NO_PROXY 格式与 httpx 0.28+ 不兼容；2) 模块级函数保留了 self 参数但兼容层绑定类型不匹配；3) 模块内部函数调用链中 self.toolbox/self.deepseek_brain 无法通过纯函数传递

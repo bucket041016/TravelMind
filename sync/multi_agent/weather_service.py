@@ -9,6 +9,7 @@ from .text_parser import (
     _max_temperature,
     _max_wind_level,
 )
+from .fact_normalizer import normalize_weather_fact
 
 
 def _build_weather(self, prefs: dict[str, Any]) -> dict[str, str]:
@@ -50,3 +51,19 @@ def _build_weather_advice(weather: dict[str, str]) -> dict[str, str]:
         "schedule_note": schedule,
     }
 
+
+def _normalize_weather_facts(
+    weather: dict[str, str],
+    prefs: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """将原始天气文本归一化为结构化 WeatherFact。返回 {city: WeatherFact}。"""
+    result: dict[str, dict[str, Any]] = {}
+    start_date = prefs.get("startDate", "")
+    for city, raw_text in weather.items():
+        result[city] = normalize_weather_fact(
+            raw_text,
+            city=city,
+            date=start_date,
+            source="weather",
+        )
+    return result

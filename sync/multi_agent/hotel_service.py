@@ -10,6 +10,8 @@ from .text_parser import (
     _extract_prefixed_line,
     _parse_numbered_section,
 )
+from .fact_normalizer import normalize_place_candidate
+from .candidate_ranker import rank_candidates
 
 def _parse_price_range(value) -> dict | None:
     import re as _re
@@ -101,6 +103,35 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
         "notes": [provider_message, "酒店候选来自 POI 搜索，不代表实时房态或可预订价格。"],
         "raw": raw,
     }
+
+
+def _normalize_and_rank_hotels(
+    hotels: dict[str, Any],
+    prefs: dict[str, Any],
+) -> None:
+    """对酒店候选执行事实归一化和偏好排序（原地修改 hotels）。"""
+    candidates = hotels.get("candidates")
+    if not candidates:
+        return
+    city = prefs.get("destinationCity", "")
+    budget = prefs.get("budget")
+    max_price = float(budget) / max(prefs.get("days", 1), 1) if budget else None
+    normalized = [
+        normalize_place_candidate(
+            c,
+            city=city,
+            category="hotel",
+            source=str(c.get("cost_source") or "hotel_poi"),
+        )
+        for c in candidates
+    ]
+    ranked = rank_candidates(
+        normalized,
+        expected_city=city,
+        preferences={"interests": [prefs.get("hotelLevel", "")]},
+        max_price=max_price,
+    )
+    hotels["candidates"] = ranked.get("selected", normalized)
 
 def _estimate_hotel_price_ranges(
     prefs: dict[str, Any],

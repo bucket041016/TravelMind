@@ -55,6 +55,7 @@ from .text_parser import (
 from .weather_service import (
     _build_weather,
     _build_weather_advice,
+    _normalize_weather_facts,
 )
 from .transport_service import (
     _build_intercity_transport,
@@ -78,6 +79,7 @@ from .hotel_service import (
     _hotel_reference_price,
     _is_generic_hotel_area,
     _looks_like_nearby_label,
+    _normalize_and_rank_hotels,
 )
 from .poi_service import (
     _build_pois,
@@ -87,6 +89,7 @@ from .poi_service import (
     _enrich_place_clusters,
     _has_real_place_signal,
     _nearest_cluster,
+    _normalize_and_rank_pois,
     _poi_key,
     _take_unused_poi,
     _take_unused_poi_for_cluster,
@@ -192,6 +195,7 @@ class StructuredTravelPlanner:
         prefs = self._normalize_preferences(payload)
 
         weather = self._record(trace, "WeatherAgent 天气与出行建议", prefs, lambda: self._build_weather(prefs))
+        weather_facts = _normalize_weather_facts(weather, prefs) if weather else {}
         weather_advice = self._record(
             trace,
             "WeatherAdviceAgent 穿衣防晒建议",
@@ -200,7 +204,9 @@ class StructuredTravelPlanner:
         )
         routes = self._record(trace, "IntercityTransportAgent 跨城主交通", prefs, lambda: self._build_intercity_transport(prefs))
         pois = self._record(trace, "POIAgent 景点美食", prefs, lambda: self._build_pois(prefs))
+        _normalize_and_rank_pois(pois, prefs, weather)
         hotels = self._record(trace, "HotelAgent 住宿匹配", prefs, lambda: self._build_hotels(prefs))
+        _normalize_and_rank_hotels(hotels, prefs)
         self._enrich_place_clusters(pois, hotels)
         local_transport = self._record(trace, "LocalMobilityAgent 目的地内交通", prefs, lambda: self._build_local_transport(prefs, routes, hotels))
         llm_plan = self._record(
@@ -276,6 +282,7 @@ class StructuredTravelPlanner:
             "local_transport": local_transport,
             "hotels": hotels,
             "weather": weather,
+            "weather_facts": weather_facts,
             "weather_advice": weather_advice,
             "map": map_data,
             "pois": pois,
@@ -478,6 +485,7 @@ class StructuredTravelPlanner:
     # weather_service
     _build_weather = _build_weather
     _build_weather_advice = staticmethod(_build_weather_advice)
+    _normalize_weather_facts = staticmethod(_normalize_weather_facts)
 
     # transport_service
     _build_intercity_transport = _build_intercity_transport
@@ -501,6 +509,7 @@ class StructuredTravelPlanner:
     _hotel_reference_price = staticmethod(_hotel_reference_price)
     _is_generic_hotel_area = staticmethod(_is_generic_hotel_area)
     _looks_like_nearby_label = staticmethod(_looks_like_nearby_label)
+    _normalize_and_rank_hotels = staticmethod(_normalize_and_rank_hotels)
 
     # poi_service
     _build_pois = _build_pois
@@ -510,6 +519,7 @@ class StructuredTravelPlanner:
     _enrich_place_clusters = staticmethod(_enrich_place_clusters)
     _has_real_place_signal = staticmethod(_has_real_place_signal)
     _nearest_cluster = staticmethod(_nearest_cluster)
+    _normalize_and_rank_pois = staticmethod(_normalize_and_rank_pois)
     _poi_key = staticmethod(_poi_key)
     _take_unused_poi = staticmethod(_take_unused_poi)
     _take_unused_poi_for_cluster = staticmethod(_take_unused_poi_for_cluster)

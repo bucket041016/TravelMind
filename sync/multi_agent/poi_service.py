@@ -9,6 +9,8 @@ from .text_parser import (
     _normalize_point,
     _parse_numbered_section,
 )
+from .fact_normalizer import normalize_place_candidates
+from .candidate_ranker import rank_candidates
 
 def _point_distance_km(start: dict, end: dict) -> float:
     import math
@@ -36,6 +38,40 @@ def _build_pois(self, prefs: dict[str, Any]) -> dict[str, Any]:
         "specialty_places": specialty_places,
         "raw": raw,
     }
+
+
+def _normalize_and_rank_pois(
+    pois: dict[str, Any],
+    prefs: dict[str, Any],
+    weather: dict[str, str] | None = None,
+) -> None:
+    """对 POI 候选执行事实归一化和偏好排序（原地修改 pois）。"""
+    city = prefs.get("destinationCity", "")
+    interests = prefs.get("interests") or []
+    weather_summary = " ".join((weather or {}).values())
+
+    for group, category in [
+        ("attractions", "activity"),
+        ("foods", "food"),
+        ("specialty_places", "activity"),
+    ]:
+        raw_items = pois.get(group)
+        if not raw_items:
+            continue
+        normalized = normalize_place_candidates(
+            raw_items,
+            city=city,
+            category=category,
+            source="amap_poi",
+        )
+        ranked = rank_candidates(
+            normalized,
+            expected_city=city,
+            preferences={"interests": interests},
+            weather=weather_summary,
+        )
+        pois[group] = ranked.get("selected", normalized)
+
 
 def _enrich_place_clusters(pois: dict[str, Any], hotels: dict[str, Any]) -> None:
     cluster_items: list[dict[str, Any]] = []
