@@ -32,6 +32,39 @@
 
 ---
 
+## [2026-08-01 11:24] Phase D 模块化修复 + 文档清理
+
+### 意图
+- 修复模块化拆分后的测试失败（14 个 -> 0 个）
+- 清理不属于 Ay 分支的文档文件
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `sync/multi_agent/deepseek_brain.py` | 修改 | 添加 _sanitize_no_proxy() 清理系统 NO_PROXY 环境变量中 httpx 0.28+ 无法解析的条目 |
+| `sync/multi_agent/structured_planner.py` | 修改 | 兼容层全部改为 staticmethod 绑定，run() 方法显式传入 toolbox/deepseek_brain |
+| `sync/multi_agent/local_transport_service.py` | 修改 | _amap_local_segment 和 _judge_local_segment 从 self 依赖改为显式 toolbox/deepseek_brain 参数 |
+| `sync/multi_agent/hotel_service.py` | 修改 | _estimate_hotel_price_ranges 从 self 依赖改为显式 deepseek_brain 参数 |
+| `sync/multi_agent/*.py` | 修改 | 批量清理模块级函数中遗留的 self/cls 参数，解决循环导入 |
+| `tests/test_travelmind_regression.py` | 修改 | 适配纯函数调用方式，在调用中传入 toolbox/deepseek_brain |
+| `HANDOFF.md` | 删除 | 朋友的交接文档，不属于 Ay 分支 |
+| `MULTI_AGENT_UPGRADE.md` | 删除 | 朋友的升级笔记，不属于 Ay 分支 |
+| `PRODUCT_UPGRADE_PLAN.md` | 删除 | 朋友的产品升级计划，不属于 Ay 分支 |
+| `TRAVELMIND_README.md` | 删除 | 朋友的项目 README，不属于 Ay 分支（保留原始 README.md） |
+
+### 验证
+- [x] 全部 27 个 .py 文件 py_compile 通过
+- [x] 全部 22 个测试通过（从 14 失败降到 0 失败）
+- [ ] 已提交到 Ay 分支
+
+### 备注
+- 测试失败的三个根因：1) 系统 NO_PROXY 格式与 httpx 0.28+ 不兼容；2) 模块级函数保留了 self 参数但兼容层绑定类型不匹配；3) 模块内部函数调用链中 self.toolbox/self.deepseek_brain 无法通过纯函数传递
+- 解决方案：将所有模块级函数改为纯函数（不依赖 self），需要 toolbox/deepseek_brain 的函数改为通过显式 keyword 参数传入
+- 4 个删除的 .md 文件是 Bucket55 在 Initial commit 时加入的工作笔记，有价值的内容已在 Gold-WC-bucket1/ 审计副本中保留
+- 下一步：UI 重设计 或 Phase E 约束链路集成
+
+---
+
 ## [2026-07-31 22:00] Phase A+B+C 后端模块化拆分
 
 ### 意图
@@ -64,7 +97,7 @@
 ### 验证
 - [x] 全部 27 个 .py 文件 py_compile 通过
 - [x] 测试 8 通过 14 失败（与拆分前基线一致，失败均为 httpx 兼容性问题）
-- [ ] 已提交到 Ay 分支
+- [x] 已提交到 Ay 分支
 
 ### 备注
 - structured_planner.py 保留了向后兼容层，将所有提取的函数重新绑定为类属性，确保测试和其他代码的 self.method() 和 Class.method() 调用方式都能正常工作

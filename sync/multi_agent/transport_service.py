@@ -37,7 +37,7 @@ def _build_intercity_transport(self, prefs: dict[str, Any]) -> dict[str, Any]:
     route_origin_detail, route_destination_detail = _route_endpoint_details(route_text, origin, destination)
 
     if "rail" in modes:
-        rail_summary = self._section_summary(route_text, "高铁/城际铁路") or rail_payload.message
+        rail_summary = _section_summary(route_text, "高铁/城际铁路") or rail_payload.message
         rail_origin_detail, rail_destination_detail = _rail_endpoint_details(rail_summary, origin, destination)
         options.append(
             {
@@ -82,7 +82,7 @@ def _build_intercity_transport(self, prefs: dict[str, Any]) -> dict[str, Any]:
             }
         )
     if "driving" in modes:
-        driving_summary = self._section_summary(route_text, "驾车") or "适合多人同行、行李较多或目的地分散；需关注停车和拥堵。"
+        driving_summary = _section_summary(route_text, "驾车") or "适合多人同行、行李较多或目的地分散；需关注停车和拥堵。"
         options.append(
             {
                 "mode": "driving",
@@ -195,7 +195,7 @@ def _recommend_intercity_mode(prefs: dict[str, Any], options: list[dict[str, Any
         return "driving"
     return options[0]["mode"] if options else "driving"
 
-def _estimate_intercity_cost(self, prefs: dict[str, Any], routes: dict[str, Any]) -> tuple[int, str]:
+def _estimate_intercity_cost(prefs: dict[str, Any], routes: dict[str, Any]) -> tuple[int, str]:
     travelers = prefs["travelers"]
     recommended = routes.get("recommended")
     route_text = str(routes.get("raw") or "")
@@ -208,7 +208,7 @@ def _estimate_intercity_cost(self, prefs: dict[str, Any], routes: dict[str, Any]
         return round(distance * 1.2), "rule_fallback"
 
     if recommended == "rail":
-        ticket = self._average_range_from_text(route_text)
+        ticket = _average_range_from_text(route_text)
         if ticket:
             return round(ticket * 2 * travelers), "rule_fallback"
         distance = prefs.get("estimatedDistanceKm") or 180

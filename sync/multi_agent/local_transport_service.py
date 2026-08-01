@@ -21,8 +21,47 @@ from .text_parser import (
     _section_summary,
 )
 
+def _fallback_cost_for_category(category: str) -> int:
+    return {"food": 80, "activity": 0, "hotel": 0, "transfer": 0}.get(category, 0)
 
-def _build_local_transport(self, prefs: dict[str, Any], routes: dict[str, Any], hotels: dict[str, Any]) -> dict[str, Any]:
+def _timeline_item(*args, **kwargs):
+    """延迟导入 itinerary_builder._timeline_item，打破循环引用。"""
+    from .itinerary_builder import _timeline_item as _real_timeline_item
+    return _real_timeline_item(*args, **kwargs)
+
+
+def _poi_key(poi: dict) -> str:
+    import re as _re
+    name = str(poi.get("name") or "").strip()
+    key = _re.sub(r"[\s\xb7,\uff0c:\uff1a\uff1b;\uff08\uff09()]+", "", name)
+    for suffix in ["体育公园", "森林公园", "湿地公园", "风景名胜区", "风景区", "景区", "公园"]:
+        if len(key) > len(suffix) + 1 and key.endswith(suffix):
+            key = key[: -len(suffix)]
+            break
+    return key or str(poi.get("id") or "").strip()
+
+
+def _dedupe_pois(items: list | None) -> list:
+    deduped = []
+    seen = set()
+    for item in items or []:
+        if not item.get("name"):
+            continue
+        if not (item.get("location") or item.get("address") or item.get("rating") or item.get("type") or item.get("photo_url")):
+            continue
+        key = _poi_key(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _default_hotel_area(prefs: dict) -> str:
+    return f"建议住在{prefs['destinationCity']}核心商圈、地铁枢纽或第一天重点景点附近，减少换乘和搬运行李。"
+
+
+def _build_local_transport(prefs: dict[str, Any], routes: dict[str, Any], hotels: dict[str, Any]) -> dict[str, Any]:
     modes = prefs["localModes"]
     recommended = _ordered_local_modes_for_preferences(modes, prefs)
     notes = []
@@ -36,7 +75,7 @@ def _build_local_transport(self, prefs: dict[str, Any], routes: dict[str, Any], 
         notes.append("骑行适合滨水、绿道和景区外围路线，雨天或高温时不建议强行安排。")
     if "driving" in modes:
         notes.append("目的地自驾适合郊区景点和多人同行，但要提前确认停车条件。")
-    notes.append(f"住宿建议参考：{hotels.get('area_recommendation', self._default_hotel_area(prefs))}")
+    notes.append(f"住宿建议参考：{hotels.get('area_recommendation', _default_hotel_area(prefs))}")
     return {
         "recommended_modes": recommended,
         "notes": notes,
@@ -56,11 +95,13 @@ def _ordered_local_modes_for_preferences(modes: list[str], prefs: dict[str, Any]
     return ordered or available
 
 def _build_local_transport_segments(
-    self,
     prefs: dict[str, Any],
     local_transport: dict[str, Any],
     itinerary_days: list[dict[str, Any]],
     pois: dict[str, Any] | None = None,
+    *,
+    toolbox=None,
+    deepseek_brain=None,
 ) -> dict[str, Any]:
     enriched = {
         "recommended_modes": list(local_transport.get("recommended_modes") or prefs.get("localModes") or []),
@@ -89,6 +130,7 @@ def _build_local_transport_segments(
                 distance_km,
                 route_queries,
                 query_limit,
+                toolbox=toolbox,
             )
             replacement_candidates = _replacement_candidates_for_segment(
                 pois or {},
@@ -104,6 +146,7 @@ def _build_local_transport_segments(
                 segment,
                 enriched["recommended_modes"],
                 replacement_candidates,
+                deepseek_brain=deepseek_brain,
             )
             segment, route_queries = _apply_local_route_judgement(
                 prefs,
@@ -117,6 +160,7 @@ def _build_local_transport_segments(
                 used_place_keys,
                 route_queries,
                 query_limit,
+                toolbox=toolbox,
             )
 
             enriched["segments"].append(segment)
@@ -135,7 +179,6 @@ def _local_route_query_limit() -> int:
         return 8
 
 def _local_segment_for_mode(
-    self,
     prefs: dict[str, Any],
     day_number: Any,
     previous: dict[str, Any],
@@ -144,15 +187,16 @@ def _local_segment_for_mode(
     distance_km: float,
     route_queries: int,
     query_limit: int,
+    *,
+    toolbox=None,
 ) -> tuple[dict[str, Any], int]:
     if mode == "taxi":
         return _rule_local_segment(day_number, previous, current, mode, distance_km, "estimated"), route_queries
     if route_queries < query_limit:
-        return _amap_local_segment(prefs, day_number, previous, current, mode, distance_km), route_queries + 1
+        return _amap_local_segment(prefs, day_number, previous, current, mode, distance_km, toolbox=toolbox), route_queries + 1
     return _rule_local_segment(day_number, previous, current, mode, distance_km, "limited"), route_queries
 
 def _judge_local_segment(
-    self,
     prefs: dict[str, Any],
     day: dict[str, Any],
     previous: dict[str, Any],
@@ -160,8 +204,12 @@ def _judge_local_segment(
     segment: dict[str, Any],
     modes: list[str],
     replacement_candidates: list[dict[str, Any]],
+    *,
+    deepseek_brain=None,
 ) -> dict[str, Any]:
     rule_judgement = _rule_route_judgement(segment, modes)
+    if deepseek_brain is None:
+        return rule_judgement
     payload = {
         "preferences": {
             "destination_city": prefs.get("destinationCity"),
@@ -188,7 +236,7 @@ def _judge_local_segment(
             "distance": segment.get("distance"),
             "distance_km": segment.get("distance_km"),
             "price": segment.get("price"),
-            "summary": self._compact(segment.get("summary", ""), 420),
+            "summary": _compact(segment.get("summary", ""), 420),
             "source": segment.get("source"),
             "status": segment.get("status"),
         },
@@ -209,7 +257,7 @@ def _judge_local_segment(
             "打车价格不是实时价格，只能作为距离规则估算展示",
         ],
     }
-    result = self.deepseek_brain.judge_route(payload)
+    result = deepseek_brain.judge_route(payload)
     if result.get("llm_status") != "used":
         return rule_judgement
 
@@ -220,7 +268,6 @@ def _judge_local_segment(
     return judgement
 
 def _apply_local_route_judgement(
-    self,
     prefs: dict[str, Any],
     day_number: Any,
     previous: dict[str, Any],
@@ -232,13 +279,15 @@ def _apply_local_route_judgement(
     used_place_keys: set[str],
     route_queries: int,
     query_limit: int,
+    *,
+    toolbox=None,
 ) -> tuple[dict[str, Any], int]:
     decision = judgement.get("decision")
     if decision == "replace_place":
         replacement = _validated_replacement_candidate(judgement, replacement_candidates, current, previous, used_place_keys)
         if replacement:
             _replace_segment_item(day_number, current, replacement)
-            replacement_key = self._poi_key(replacement)
+            replacement_key = _poi_key(replacement)
             if replacement_key:
                 used_place_keys.add(replacement_key)
             replacement_id = str(replacement.get("id") or "")
@@ -255,6 +304,7 @@ def _apply_local_route_judgement(
                 distance_km,
                 route_queries,
                 query_limit,
+                toolbox=toolbox,
             )
             return _annotate_route_judgement(segment, judgement), route_queries
         judgement = {
@@ -276,6 +326,7 @@ def _apply_local_route_judgement(
             distance_km,
             route_queries,
             query_limit,
+            toolbox=toolbox,
         )
         switched["status"] = "mode_switched"
         switched["warning"] = judgement.get("judge_reason") or f"原路线体验不佳，已改为{MODE_LABELS.get(switch_mode, switch_mode)}估算。"
@@ -286,7 +337,7 @@ def _apply_local_route_judgement(
 
     return _annotate_route_judgement(segment, judgement), route_queries
 
-def _rule_route_judgement(self, segment: dict[str, Any], modes: list[str]) -> dict[str, Any]:
+def _rule_route_judgement(segment: dict[str, Any], modes: list[str]) -> dict[str, Any]:
     mode = str(segment.get("mode") or "")
     distance_km = float(segment.get("distance_km") or 0)
     duration_minutes = _local_duration_minutes(segment)
@@ -296,7 +347,7 @@ def _rule_route_judgement(self, segment: dict[str, Any], modes: list[str]) -> di
     if too_long_transit or very_far:
         reason_parts = []
         if duration_minutes:
-            reason_parts.append(f"耗时约 {self._format_minutes(duration_minutes)}")
+            reason_parts.append(f"耗时约 {_format_minutes(duration_minutes)}")
         if distance_km:
             reason_parts.append(f"距离约 {_format_local_distance(distance_km)}")
         reason = "、".join(reason_parts) or "距离/耗时过长"
@@ -350,7 +401,7 @@ def _normalize_route_judgement(value: Any, source: str) -> dict[str, Any]:
         "judge_source": source,
     }
 
-def _annotate_route_judgement(self, segment: dict[str, Any], judgement: dict[str, Any]) -> dict[str, Any]:
+def _annotate_route_judgement(segment: dict[str, Any], judgement: dict[str, Any]) -> dict[str, Any]:
     annotated = dict(segment)
     annotated["judge_source"] = judgement.get("judge_source", "rule_fallback")
     annotated["judge_decision"] = judgement.get("decision", "accept")
@@ -362,7 +413,6 @@ def _annotate_route_judgement(self, segment: dict[str, Any], judgement: dict[str
     return annotated
 
 def _impractical_local_segment(
-    self,
     day_number: Any,
     previous: dict[str, Any],
     current: dict[str, Any],
@@ -397,7 +447,6 @@ def _switch_mode_from_judgement(judgement: dict[str, Any], modes: list[str]) -> 
     return "taxi"
 
 def _replacement_candidates_for_segment(
-    self,
     pois: dict[str, Any],
     current_item: dict[str, Any],
     used_place_keys: set[str],
@@ -405,9 +454,9 @@ def _replacement_candidates_for_segment(
 ) -> list[dict[str, Any]]:
     category = current_item.get("category")
     if category == "activity":
-        pool = self._dedupe_pois([*(pois.get("attractions") or []), *(pois.get("specialty_places") or [])])
+        pool = _dedupe_pois([*(pois.get("attractions") or []), *(pois.get("specialty_places") or [])])
     elif category == "food":
-        pool = self._dedupe_pois(pois.get("foods"))
+        pool = _dedupe_pois(pois.get("foods"))
     else:
         return []
 
@@ -415,10 +464,10 @@ def _replacement_candidates_for_segment(
     current_id = str(current_item.get("poi_id") or "")
     for poi in pool:
         poi_id = str(poi.get("id") or "")
-        key = self._poi_key(poi)
+        key = _poi_key(poi)
         if poi_id == current_id or poi_id in used_place_keys or key in used_place_keys:
             continue
-        point = self._normalize_point(poi.get("location"))
+        point = _normalize_point(poi.get("location"))
         if not point:
             continue
         distance = _point_distance_km(previous_point, point)
@@ -434,7 +483,6 @@ def _replacement_candidates_for_segment(
     return candidates[:8]
 
 def _validated_replacement_candidate(
-    self,
     judgement: dict[str, Any],
     replacement_candidates: list[dict[str, Any]],
     current: dict[str, Any],
@@ -445,19 +493,19 @@ def _validated_replacement_candidate(
         candidate_id = str(candidate.get("candidate_id") or candidate.get("id") or "")
         if candidate_id and candidate_id == judgement.get("replacement_candidate_id"):
             current_distance = _point_distance_km(previous["point"], current["point"])
-            candidate_point = self._normalize_point(candidate.get("location"))
+            candidate_point = _normalize_point(candidate.get("location"))
             if candidate_point and _point_distance_km(previous["point"], candidate_point) < current_distance:
                 return candidate
     return None
 
-def _replace_segment_item(self, day_number: Any, current: dict[str, Any], candidate: dict[str, Any]) -> None:
+def _replace_segment_item(day_number: Any, current: dict[str, Any], candidate: dict[str, Any]) -> None:
     item = current["item"]
     category = item.get("category") if item.get("category") in {"activity", "food"} else "activity"
     if category == "food":
         suffix = "用餐"
     else:
         suffix = "游览"
-    replacement_item = self._timeline_item(
+    replacement_item = _timeline_item(
         int(day_number or item.get("day") or 1),
         str(item.get("time") or ""),
         f"{candidate.get('name', '替换地点')}{suffix}",
@@ -467,7 +515,7 @@ def _replace_segment_item(self, day_number: Any, current: dict[str, Any], candid
         str(candidate.get("description") or "DeepSeek 路线体验评审建议替换为同片区真实地点，减少长距离折返。"),
         category,
         candidate,
-        self._fallback_cost_for_category(category),
+        _fallback_cost_for_category(category),
         place_source=candidate.get("_place_source") or "amap_poi",
         is_real_place=True,
     )
@@ -515,16 +563,19 @@ def _select_local_segment_mode(modes: list[str], distance_km: float) -> str:
     return "taxi"
 
 def _amap_local_segment(
-    self,
     prefs: dict[str, Any],
     day_number: Any,
     previous: dict[str, Any],
     current: dict[str, Any],
     mode: str,
     distance_km: float,
+    *,
+    toolbox=None,
 ) -> dict[str, Any]:
+    if toolbox is None:
+        return _rule_local_segment(day_number, previous, current, mode, distance_km, "fallback", "toolbox not available")
     try:
-        raw = self.toolbox.call(
+        raw = toolbox.call(
             "amap_plan_routes",
             origin=previous["detail"],
             destination=current["detail"],
@@ -533,7 +584,7 @@ def _amap_local_segment(
             modes=mode,
             max_routes=1,
         )
-        summary = self._section_summary(raw, _local_route_heading(mode)) or raw
+        summary = _section_summary(raw, _local_route_heading(mode)) or raw
         if "查询失败" in summary or "高德路线规划失败" in summary or "高德未返回可用路线" in summary:
             return _rule_local_segment(day_number, previous, current, mode, distance_km, "fallback", summary)
         return _local_segment_from_summary(day_number, previous, current, mode, distance_km, summary)
@@ -549,7 +600,6 @@ def _local_route_heading(mode: str) -> str:
     }.get(mode, MODE_LABELS.get(mode, mode))
 
 def _local_segment_from_summary(
-    self,
     day_number: Any,
     previous: dict[str, Any],
     current: dict[str, Any],
@@ -557,7 +607,7 @@ def _local_segment_from_summary(
     distance_km: float,
     summary: str,
 ) -> dict[str, Any]:
-    parsed_distance = self._parse_local_distance_km(summary) or distance_km
+    parsed_distance = _parse_local_distance_km(summary) or distance_km
     amount, price, cost_unit = _local_segment_price(mode, parsed_distance, summary, "amap_route")
     return {
         "day": day_number,
@@ -567,7 +617,7 @@ def _local_segment_from_summary(
         "to_item_id": current["item"].get("id", ""),
         "mode": mode,
         "mode_label": MODE_LABELS.get(mode, mode),
-        "duration": self._parse_local_duration(summary) or _fallback_local_duration(mode, parsed_distance),
+        "duration": _parse_local_duration(summary) or _fallback_local_duration(mode, parsed_distance),
         "distance": _format_local_distance(parsed_distance),
         "distance_km": round(parsed_distance, 2),
         "price": price,
@@ -580,7 +630,6 @@ def _local_segment_from_summary(
     }
 
 def _rule_local_segment(
-    self,
     day_number: Any,
     previous: dict[str, Any],
     current: dict[str, Any],
@@ -652,8 +701,8 @@ def _format_local_distance(distance_km: float) -> str:
         return f"{round(distance_km * 1000)} m"
     return f"{distance_km:.1f} km"
 
-def _local_duration_minutes(cls, segment: dict[str, Any]) -> int:
-    return cls._parse_local_duration_minutes(segment.get("duration") or segment.get("summary") or "")
+def _local_duration_minutes(segment: dict[str, Any]) -> int:
+    return _parse_local_duration_minutes(segment.get("duration") or segment.get("summary") or "")
 
 def _fallback_local_duration(mode: str, distance_km: float) -> str:
     speed = {"walking": 4.5, "bicycling": 12, "transit": 18, "driving": 25, "taxi": 25}.get(mode, 18)

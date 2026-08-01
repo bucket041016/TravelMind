@@ -238,7 +238,7 @@ class StructuredTravelPlanner:
             trace,
             "LocalMobilityAgent 目的地内路线",
             prefs,
-            lambda: self._build_local_transport_segments(prefs, local_transport, itinerary_days, pois),
+            lambda: self._build_local_transport_segments(prefs, local_transport, itinerary_days, pois, toolbox=self.toolbox, deepseek_brain=self.deepseek_brain),
         )
         map_data = self._record(
             trace,
@@ -477,11 +477,11 @@ class StructuredTravelPlanner:
 
     # weather_service
     _build_weather = _build_weather
-    _build_weather_advice = _build_weather_advice
+    _build_weather_advice = staticmethod(_build_weather_advice)
 
     # transport_service
     _build_intercity_transport = _build_intercity_transport
-    _estimate_intercity_cost = _estimate_intercity_cost
+    _estimate_intercity_cost = staticmethod(_estimate_intercity_cost)
     _extract_route_endpoint = staticmethod(_extract_route_endpoint)
     _flight_strategy = staticmethod(_flight_strategy)
     _rail_endpoint_details = staticmethod(_rail_endpoint_details)
@@ -494,10 +494,10 @@ class StructuredTravelPlanner:
     _build_hotels = _build_hotels
     _clean_hotel_nearby_label = staticmethod(_clean_hotel_nearby_label)
     _default_hotel_area = staticmethod(_default_hotel_area)
-    _estimate_hotel_price_ranges = _estimate_hotel_price_ranges
-    _hotel_area_from_candidates = classmethod(_hotel_area_from_candidates)
-    _hotel_nearby_label = classmethod(_hotel_nearby_label)
-    _hotel_nearby_landmarks = classmethod(_hotel_nearby_landmarks)
+    _estimate_hotel_price_ranges = staticmethod(_estimate_hotel_price_ranges)
+    _hotel_area_from_candidates = staticmethod(_hotel_area_from_candidates)
+    _hotel_nearby_label = staticmethod(_hotel_nearby_label)
+    _hotel_nearby_landmarks = staticmethod(_hotel_nearby_landmarks)
     _hotel_reference_price = staticmethod(_hotel_reference_price)
     _is_generic_hotel_area = staticmethod(_is_generic_hotel_area)
     _looks_like_nearby_label = staticmethod(_looks_like_nearby_label)
@@ -505,40 +505,40 @@ class StructuredTravelPlanner:
     # poi_service
     _build_pois = _build_pois
     _cluster_anchor = staticmethod(_cluster_anchor)
-    _cluster_preference_order = _cluster_preference_order
+    _cluster_preference_order = staticmethod(_cluster_preference_order)
     _dedupe_pois = staticmethod(_dedupe_pois)
-    _enrich_place_clusters = _enrich_place_clusters
+    _enrich_place_clusters = staticmethod(_enrich_place_clusters)
     _has_real_place_signal = staticmethod(_has_real_place_signal)
-    _nearest_cluster = _nearest_cluster
+    _nearest_cluster = staticmethod(_nearest_cluster)
     _poi_key = staticmethod(_poi_key)
     _take_unused_poi = staticmethod(_take_unused_poi)
     _take_unused_poi_for_cluster = staticmethod(_take_unused_poi_for_cluster)
 
     # local_transport_service
-    _amap_local_segment = _amap_local_segment
-    _annotate_route_judgement = _annotate_route_judgement
-    _apply_local_route_judgement = _apply_local_route_judgement
-    _build_local_transport = _build_local_transport
-    _build_local_transport_segments = _build_local_transport_segments
+    _amap_local_segment = staticmethod(_amap_local_segment)
+    _annotate_route_judgement = staticmethod(_annotate_route_judgement)
+    _apply_local_route_judgement = staticmethod(_apply_local_route_judgement)
+    _build_local_transport = staticmethod(_build_local_transport)
+    _build_local_transport_segments = staticmethod(_build_local_transport_segments)
     _fallback_local_duration = staticmethod(_fallback_local_duration)
     _format_local_distance = staticmethod(_format_local_distance)
     _impractical_local_segment = staticmethod(_impractical_local_segment)
     _itinerary_used_place_keys = staticmethod(_itinerary_used_place_keys)
-    _judge_local_segment = _judge_local_segment
-    _local_duration_minutes = classmethod(_local_duration_minutes)
+    _judge_local_segment = staticmethod(_judge_local_segment)
+    _local_duration_minutes = staticmethod(_local_duration_minutes)
     _local_route_heading = staticmethod(_local_route_heading)
     _local_route_query_limit = staticmethod(_local_route_query_limit)
-    _local_segment_for_mode = _local_segment_for_mode
+    _local_segment_for_mode = staticmethod(_local_segment_for_mode)
     _local_segment_from_summary = staticmethod(_local_segment_from_summary)
     _local_segment_price = staticmethod(_local_segment_price)
     _normalize_route_judgement = staticmethod(_normalize_route_judgement)
     _ordered_local_modes_for_preferences = staticmethod(_ordered_local_modes_for_preferences)
     _point_distance_km = staticmethod(_point_distance_km)
     _public_item_segment = staticmethod(_public_item_segment)
-    _replace_segment_item = _replace_segment_item
+    _replace_segment_item = staticmethod(_replace_segment_item)
     _replacement_candidates_for_segment = staticmethod(_replacement_candidates_for_segment)
     _rule_local_segment = staticmethod(_rule_local_segment)
-    _rule_route_judgement = _rule_route_judgement
+    _rule_route_judgement = staticmethod(_rule_route_judgement)
     _segment_place = staticmethod(_segment_place)
     _select_local_segment_mode = staticmethod(_select_local_segment_mode)
     _switch_mode_from_judgement = staticmethod(_switch_mode_from_judgement)
@@ -548,7 +548,7 @@ class StructuredTravelPlanner:
     _activity_count = staticmethod(_activity_count)
     _average_cost = staticmethod(_average_cost)
     _average_cost_by_source = staticmethod(_average_cost_by_source)
-    _build_budget = _build_budget
+    _build_budget = staticmethod(_build_budget)
     _category_image_url = staticmethod(_category_image_url)
     _combined_segment_source = staticmethod(_combined_segment_source)
     _combined_source = staticmethod(_combined_source)
@@ -559,16 +559,16 @@ class StructuredTravelPlanner:
 
     # itinerary_builder
     _build_deepseek_itinerary_days = _build_deepseek_itinerary_days
-    _build_itinerary_days = _build_itinerary_days
+    _build_itinerary_days = staticmethod(_build_itinerary_days)
     _cost_metadata = staticmethod(_cost_metadata)
-    _default_return_transfer_detail = classmethod(_default_return_transfer_detail)
+    _default_return_transfer_detail = staticmethod(_default_return_transfer_detail)
     _display_transport_text = staticmethod(_display_transport_text)
     _fallback_cost_for_category = staticmethod(_fallback_cost_for_category)
     _find_llm_candidate = staticmethod(_find_llm_candidate)
     _is_return_transfer_raw_item = staticmethod(_is_return_transfer_raw_item)
     _llm_suggestion_item = staticmethod(_llm_suggestion_item)
     _looks_like_lodging_text = staticmethod(_looks_like_lodging_text)
-    _materialize_llm_itinerary = _materialize_llm_itinerary
+    _materialize_llm_itinerary = staticmethod(_materialize_llm_itinerary)
     _normalize_llm_category = staticmethod(_normalize_llm_category)
     _normalize_price_confidence = staticmethod(_normalize_price_confidence)
     _normalize_return_transfer_item = staticmethod(_normalize_return_transfer_item)
@@ -586,15 +586,15 @@ class StructuredTravelPlanner:
     _normalize_quality_review = staticmethod(_normalize_quality_review)
     _repair_plan_uses_known_candidates = staticmethod(_repair_plan_uses_known_candidates)
     _review_and_repair_itinerary = _review_and_repair_itinerary
-    _rule_quality_review = _rule_quality_review
+    _rule_quality_review = staticmethod(_rule_quality_review)
 
     # map_builder
-    _build_map = _build_map
+    _build_map = staticmethod(_build_map)
     _derive_destination_center = staticmethod(_derive_destination_center)
     _resolve_item_map_point = staticmethod(_resolve_item_map_point)
 
     # markdown_writer
-    _build_markdown = _build_markdown
+    _build_markdown = staticmethod(_build_markdown)
 
 
 

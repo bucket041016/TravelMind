@@ -23,6 +23,7 @@ class DeepSeekPlanningBrainAgent:
         self.timeout = float(os.getenv("DEEPSEEK_PLAN_TIMEOUT_SECONDS", "35"))
         self.model = None
         if self.api_key:
+            self._sanitize_no_proxy()
             self.model = ChatDeepSeek(
                 model=self.model_name,
                 temperature=0.35,
@@ -30,6 +31,38 @@ class DeepSeekPlanningBrainAgent:
                 max_retries=1,
                 max_tokens=3500,
             )
+
+    @staticmethod
+    def _sanitize_no_proxy() -> None:
+        """清理 NO_PROXY 环境变量中 httpx 0.28+ 无法解析的条目。
+
+        httpx 0.28+ 在构造 Client 时会用 URLPattern 解析 NO_PROXY 中的每个
+        条目，要求格式为完整 URL（如 http://127.0.0.1）。而系统常见的旧式格式
+        （127.0.0.1、localhost、::1、127.0.0.0/8 等）会导致 InvalidURL 错误，
+        表现为 "Invalid port: ':1'" 或 "Relative URLs cannot have a path
+        starting with ':'"。
+
+        本方法在构造 ChatDeepSeek -> openai.OpenAI -> httpx.Client 之前调用，
+        将无法解析的条目从 NO_PROXY 中移除，避免初始化失败。只修改当前进程的
+        环境变量，不影响系统设置。
+        """
+        for var_name in ("NO_PROXY", "no_proxy"):
+            raw = os.environ.get(var_name)
+            if not raw:
+                continue
+            try:
+                from httpx._utils import URLPattern
+            except ImportError:
+                return
+            entries = [e.strip() for e in raw.split(",") if e.strip()]
+            safe = []
+            for entry in entries:
+                try:
+                    URLPattern(entry)
+                    safe.append(entry)
+                except Exception:
+                    pass
+            os.environ[var_name] = ",".join(safe)
 
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:

@@ -4,6 +4,29 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .itinerary_builder import (
+    _materialize_llm_itinerary,
+    _normalize_llm_category,
+    _planning_brain_payload,
+)
+from .local_transport_service import (
+    _segment_place,
+)
+
+def _point_distance_km(start: dict, end: dict) -> float:
+    import math
+    lat1 = math.radians(float(start["lat"]))
+    lat2 = math.radians(float(end["lat"]))
+    delta_lat = lat2 - lat1
+    delta_lng = math.radians(float(end["lng"]) - float(start["lng"]))
+    haversine = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+    return max(0.05, 6371.0 * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1 - haversine)))
+
+
+def _format_local_distance(distance_km: float) -> str:
+    if distance_km < 1:
+        return f"{round(distance_km * 1000)} m"
+    return f"{distance_km:.1f} km"
 
 
 def _review_and_repair_itinerary(
@@ -17,7 +40,7 @@ def _review_and_repair_itinerary(
     weather_advice: dict[str, str],
     itinerary_days: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    payload, lookup = self._planning_brain_payload(prefs, routes, local_transport, hotels, pois, weather, weather_advice)
+    payload, lookup = _planning_brain_payload(prefs, routes, local_transport, hotels, pois, weather, weather_advice)
     payload["current_itinerary"] = _compact_itinerary_for_review(itinerary_days)
     payload["quality_targets"] = {
         "pace": (prefs.get("preferenceProfile") or {}).get("pace"),
@@ -36,7 +59,7 @@ def _review_and_repair_itinerary(
     repaired_plan = raw_review.get("repaired_plan") if isinstance(raw_review.get("repaired_plan"), dict) else None
     if raw_review.get("needs_repair") and repaired_plan:
         if _repair_plan_uses_known_candidates(repaired_plan, lookup):
-            candidate_days = self._materialize_llm_itinerary(
+            candidate_days = _materialize_llm_itinerary(
                 repaired_plan,
                 prefs,
                 routes,
@@ -154,7 +177,7 @@ def _normalize_quality_review(value: Any, source: str) -> dict[str, Any]:
         "repaired": False,
     }
 
-def _rule_quality_review(self, prefs: dict[str, Any], itinerary_days: list[dict[str, Any]]) -> dict[str, Any]:
+def _rule_quality_review(prefs: dict[str, Any], itinerary_days: list[dict[str, Any]]) -> dict[str, Any]:
     issues = []
     max_transfer = int((prefs.get("preferenceProfile") or {}).get("maxTransferMinutes") or 45)
     for day in itinerary_days:
@@ -168,16 +191,16 @@ def _rule_quality_review(self, prefs: dict[str, Any], itinerary_days: list[dict[
                     "kind": "cluster",
                 }
             )
-        places = [self._segment_place(item) for item in day.get("items", [])]
+        places = [_segment_place(item) for item in day.get("items", [])]
         places = [place for place in places if place]
         for previous, current in zip(places, places[1:]):
-            distance = self._point_distance_km(previous["point"], current["point"])
+            distance = _point_distance_km(previous["point"], current["point"])
             if distance > max(12, max_transfer * 0.7):
                 issues.append(
                     {
                         "severity": "high" if distance > 35 else "medium",
                         "day": day.get("day"),
-                        "message": f"{previous['detail']} 到 {current['detail']} 距离约 {self._format_local_distance(distance)}，需重点校验交通体验。",
+                        "message": f"{previous['detail']} 到 {current['detail']} 距离约 {_format_local_distance(distance)}，需重点校验交通体验。",
                         "kind": "route",
                     }
                 )

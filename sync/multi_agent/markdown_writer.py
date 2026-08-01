@@ -10,7 +10,6 @@ from .constants import (
 
 
 def _build_markdown(
-    self,
     prefs: dict[str, Any],
     routes: dict[str, Any],
     local_transport: dict[str, Any],

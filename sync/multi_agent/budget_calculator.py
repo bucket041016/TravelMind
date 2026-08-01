@@ -8,10 +8,15 @@ from urllib.parse import quote
 from .constants import (
     MODE_LABELS,
 )
+from .transport_service import (
+    _estimate_intercity_cost,
+)
+
+def _hotel_reference_price(hotel_level: str) -> int:
+    return {"经济": 220, "舒适": 380, "高端": 680}.get(hotel_level, 380)
 
 
 def _build_budget(
-    self,
     prefs: dict[str, Any],
     routes: dict[str, Any],
     local_transport: dict[str, Any],
@@ -24,12 +29,12 @@ def _build_budget(
     nights = max(days - 1, 1)
     rooms = max(1, (travelers + 1) // 2)
 
-    route_total, route_source = self._estimate_intercity_cost(prefs, routes)
+    route_total, route_source = _estimate_intercity_cost(prefs, routes)
     hotel_unit, hotel_source = _average_cost_by_source(hotels.get("candidates", []))
     if hotel_unit:
         hotel_total = round(hotel_unit * nights * rooms)
     else:
-        hotel_total = self._hotel_reference_price(prefs["hotelLevel"]) * nights * rooms
+        hotel_total = _hotel_reference_price(prefs["hotelLevel"]) * nights * rooms
         hotel_source = "category_rule"
 
     food_items = _itinerary_items_by_category(itinerary_days, {"food"})

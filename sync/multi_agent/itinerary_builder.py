@@ -16,6 +16,27 @@ from .text_parser import (
     _make_item_id,
     _parse_date,
 )
+from .budget_calculator import (
+    _category_image_url,
+)
+from .poi_service import (
+    _cluster_preference_order,
+    _dedupe_pois,
+    _poi_key,
+    _take_unused_poi_for_cluster,
+)
+
+def _default_hotel_area(prefs: dict) -> str:
+    return f"建议住在{prefs['destinationCity']}核心商圈、地铁枢纽或第一天重点景点附近，减少换乘和搬运行李。"
+
+
+def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
+    """内联自 StructuredTravelPlanner._bounded_int，用于跨模块调用。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
 
 
 def _parse_price_range(value: Any) -> dict[str, Any] | None:
@@ -265,7 +286,6 @@ def _build_deepseek_itinerary_days(
     }
 
 def _planning_brain_payload(
-    self,
     prefs: dict[str, Any],
     routes: dict[str, Any],
     local_transport: dict[str, Any],
@@ -277,10 +297,10 @@ def _planning_brain_payload(
     candidates = []
     lookup: dict[str, dict[str, Any]] = {}
     groups = [
-        ("activity", "amap_poi", self._dedupe_pois(pois.get("attractions"))[:12]),
-        ("activity", "amap_poi", self._dedupe_pois(pois.get("specialty_places"))[:8]),
-        ("food", "amap_poi", self._dedupe_pois(pois.get("foods"))[:12]),
-        ("hotel", "hotel_poi", self._dedupe_pois(hotels.get("candidates"))[:6]),
+        ("activity", "amap_poi", _dedupe_pois(pois.get("attractions"))[:12]),
+        ("activity", "amap_poi", _dedupe_pois(pois.get("specialty_places"))[:8]),
+        ("food", "amap_poi", _dedupe_pois(pois.get("foods"))[:12]),
+        ("hotel", "hotel_poi", _dedupe_pois(hotels.get("candidates"))[:6]),
     ]
     for category, place_source, items in groups:
         for item in items:
@@ -344,7 +364,6 @@ def _planning_brain_payload(
     return payload, lookup
 
 def _materialize_llm_itinerary(
-    self,
     plan: dict[str, Any],
     prefs: dict[str, Any],
     routes: dict[str, Any],
@@ -356,12 +375,12 @@ def _materialize_llm_itinerary(
     day_lookup = {}
     for raw_day in raw_days:
         if isinstance(raw_day, dict):
-            day_number = self._bounded_int(raw_day.get("day"), len(day_lookup) + 1, 1, prefs["days"])
+            day_number = _bounded_int(raw_day.get("day"), len(day_lookup) + 1, 1, prefs["days"])
             day_lookup[day_number] = raw_day
 
-    current_date = self._parse_date(prefs["startDate"])
+    current_date = _parse_date(prefs["startDate"])
     recommended_local = "、".join(MODE_LABELS.get(mode, mode) for mode in local_transport.get("recommended_modes", []))
-    hotel_area = hotels.get("area_recommendation") or self._default_hotel_area(prefs)
+    hotel_area = hotels.get("area_recommendation") or _default_hotel_area(prefs)
     used_real: set[str] = set()
     materialized_days = []
 
@@ -381,7 +400,7 @@ def _materialize_llm_itinerary(
             candidate = _find_llm_candidate(raw_item, lookup)
             is_suggestion = bool(raw_item.get("is_suggestion")) or candidate is None
             if candidate and category in {"activity", "food"}:
-                key = self._poi_key(candidate)
+                key = _poi_key(candidate)
                 candidate_id = str(candidate.get("id") or "")
                 if key in used_real or (candidate_id and candidate_id in used_real):
                     candidate = None
@@ -477,20 +496,19 @@ def _is_return_transfer_raw_item(raw_item: dict[str, Any], category: str, prefs:
     return day_number == prefs.get("days") and any(keyword in text for keyword in ["返程", "返回", "回程", "回到", "返家", "回家"])
 
 def _normalize_return_transfer_item(
-    cls,
     item: dict[str, Any],
     raw_item: dict[str, Any],
     prefs: dict[str, Any],
     routes: dict[str, Any],
 ) -> None:
     title = str(item.get("title") or raw_item.get("title") or "")
-    route_location = cls._return_transfer_location(title, raw_item, prefs, routes)
+    route_location = _return_transfer_location(title, raw_item, prefs, routes)
     item["category"] = "transfer"
     item["location"] = route_location
     item["address"] = ""
-    item["transport"] = cls._display_transport_text(raw_item.get("transport") or routes.get("recommended") or item.get("transport"))
-    if cls._looks_like_lodging_text(item.get("detail")):
-        item["detail"] = cls._default_return_transfer_detail(raw_item, prefs, routes)
+    item["transport"] = _display_transport_text(raw_item.get("transport") or routes.get("recommended") or item.get("transport"))
+    if _looks_like_lodging_text(item.get("detail")):
+        item["detail"] = _default_return_transfer_detail(raw_item, prefs, routes)
     item["place_source"] = "transport_note"
     item["location_source"] = "missing"
     item["location_point"] = None
@@ -499,14 +517,13 @@ def _normalize_return_transfer_item(
     item["validation_note"] = "返程交通说明，不作为目的地住宿或景点安排。"
 
 def _return_transfer_location(
-    cls,
     title: str,
     raw_item: dict[str, Any],
     prefs: dict[str, Any],
     routes: dict[str, Any],
 ) -> str:
     text = str(raw_item.get("location") or title or "").strip()
-    if cls._looks_like_lodging_text(text):
+    if _looks_like_lodging_text(text):
         text = title
     route_match = re.search(r"(.+?)\s*(?:->|→|到|至)\s*(.+?)(?:（|\(|，|,|。|$)", text)
     if route_match:
@@ -523,9 +540,9 @@ def _looks_like_lodging_text(value: Any) -> bool:
     lodging_markers = ["建议优先住在", "住宿区域", "住宿参考", "酒店", "周边，减少换乘", "寄存行李"]
     return any(marker in text for marker in lodging_markers)
 
-def _default_return_transfer_detail(cls, raw_item: dict[str, Any], prefs: dict[str, Any], routes: dict[str, Any]) -> str:
+def _default_return_transfer_detail(raw_item: dict[str, Any], prefs: dict[str, Any], routes: dict[str, Any]) -> str:
     detail = str(raw_item.get("detail") or "").strip()
-    if detail and not cls._looks_like_lodging_text(detail):
+    if detail and not _looks_like_lodging_text(detail):
         return detail
     mode_label = MODE_LABELS.get(routes.get("recommended"), routes.get("recommended", "高铁/动车/城际"))
     return f"按{mode_label}返回{prefs.get('originCity', '出发城市')}，这是返程交通安排，不需要再安排目的地住宿。"
@@ -548,7 +565,6 @@ def _find_llm_candidate(raw_item: dict[str, Any], lookup: dict[str, dict[str, An
     return None
 
 def _llm_suggestion_item(
-    self,
     day_number: int,
     slot: str,
     raw_item: dict[str, Any],
@@ -559,7 +575,7 @@ def _llm_suggestion_item(
     title = str(raw_item.get("title") or "DeepSeek 待确认建议")
     detail = str(raw_item.get("detail") or "这是 DeepSeek 根据偏好给出的泛化体验建议，需结合现场位置和营业情况确认。")
     note = str(raw_item.get("validation_note") or "DeepSeek 建议，未绑定高德真实 POI，需现场确认。")
-    item_id = self._make_item_id(f"day{day_number}-{slot}", 1, title)
+    item_id = _make_item_id(f"day{day_number}-{slot}", 1, title)
     item_category = category if category in {"activity", "food", "hotel", "transfer"} else "activity"
     if item_category == "transfer":
         location = str(raw_item.get("location") or title or "")
@@ -596,7 +612,7 @@ def _llm_suggestion_item(
         "location_source": "missing",
         "map_label": "",
         "map_included": False,
-        "photo_url": self._category_image_url(item_category, title),
+        "photo_url": _category_image_url(item_category, title),
         "image_source": "category_fallback",
         "is_real_place": False,
         "place_source": "llm_suggestion",
@@ -604,7 +620,6 @@ def _llm_suggestion_item(
     }
 
 def _build_itinerary_days(
-    self,
     prefs: dict[str, Any],
     routes: dict[str, Any],
     local_transport: dict[str, Any],
@@ -613,18 +628,18 @@ def _build_itinerary_days(
     weather: dict[str, str],
 ) -> list[dict[str, Any]]:
     days = []
-    attractions = self._dedupe_pois(pois.get("attractions"))
-    specialty_places = self._dedupe_pois(pois.get("specialty_places"))
-    foods = self._dedupe_pois(pois.get("foods"))
-    hotels_candidates = self._dedupe_pois(hotels.get("candidates"))
-    activity_candidates = self._dedupe_pois([*attractions, *specialty_places])
-    night_candidates = self._dedupe_pois(attractions)
+    attractions = _dedupe_pois(pois.get("attractions"))
+    specialty_places = _dedupe_pois(pois.get("specialty_places"))
+    foods = _dedupe_pois(pois.get("foods"))
+    hotels_candidates = _dedupe_pois(hotels.get("candidates"))
+    activity_candidates = _dedupe_pois([*attractions, *specialty_places])
+    night_candidates = _dedupe_pois(attractions)
     used_places: set[str] = set()
-    hotel_area = hotels.get("area_recommendation") or self._default_hotel_area(prefs)
+    hotel_area = hotels.get("area_recommendation") or _default_hotel_area(prefs)
     recommended_local = "、".join(MODE_LABELS.get(mode, mode) for mode in local_transport.get("recommended_modes", []))
-    current_date = self._parse_date(prefs["startDate"])
+    current_date = _parse_date(prefs["startDate"])
     hotel_poi = hotels_candidates[0] if hotels_candidates else None
-    cluster_order = self._cluster_preference_order(activity_candidates, foods, hotel_poi)
+    cluster_order = _cluster_preference_order(activity_candidates, foods, hotel_poi)
     hotel_cluster = str((hotel_poi or {}).get("cluster_id") or "")
     profile = prefs.get("preferenceProfile") or {}
     learned_hints = " ".join(profile.get("learnedHints") or [])
@@ -674,7 +689,7 @@ def _build_itinerary_days(
                     )
                 )
         else:
-            morning_poi = self._take_unused_poi_for_cluster(activity_candidates, used_places, day_cluster)
+            morning_poi = _take_unused_poi_for_cluster(activity_candidates, used_places, day_cluster)
             if morning_poi:
                 items.append(
                     _timeline_item(
@@ -702,7 +717,7 @@ def _build_itinerary_days(
                     )
                 )
 
-        lunch_poi = self._take_unused_poi_for_cluster(foods, used_places, day_cluster)
+        lunch_poi = _take_unused_poi_for_cluster(foods, used_places, day_cluster)
         if lunch_poi:
             items.append(
                 _timeline_item(
@@ -730,7 +745,7 @@ def _build_itinerary_days(
                 )
             )
 
-        afternoon_poi = self._take_unused_poi_for_cluster(activity_candidates, used_places, day_cluster)
+        afternoon_poi = _take_unused_poi_for_cluster(activity_candidates, used_places, day_cluster)
         if afternoon_poi:
             items.append(
                 _timeline_item(
@@ -776,7 +791,7 @@ def _build_itinerary_days(
                 )
             )
 
-        dinner_poi = self._take_unused_poi_for_cluster(foods, used_places, day_cluster)
+        dinner_poi = _take_unused_poi_for_cluster(foods, used_places, day_cluster)
         if dinner_poi:
             dinner_detail = dinner_poi.get("description", "选择真实餐厅 POI 安排晚餐。")
             if day_number == prefs["days"]:
@@ -807,7 +822,7 @@ def _build_itinerary_days(
                 )
             )
 
-        night_poi = None if relaxed_pace else self._take_unused_poi_for_cluster(night_candidates, used_places, day_cluster)
+        night_poi = None if relaxed_pace else _take_unused_poi_for_cluster(night_candidates, used_places, day_cluster)
         if night_poi:
             items.append(
                 _timeline_item(

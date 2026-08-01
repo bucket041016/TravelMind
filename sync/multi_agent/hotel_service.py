@@ -11,6 +11,36 @@ from .text_parser import (
     _parse_numbered_section,
 )
 
+def _parse_price_range(value) -> dict | None:
+    import re as _re
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = _re.search(r"(\d+(?:\.\d+)?)\s*[-~\u2014\u2013]\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        lo, hi = float(m.group(1)), float(m.group(2))
+        return {"min": round(min(lo, hi)), "max": round(max(lo, hi)), "currency": "CNY"}
+    m2 = _re.search(r"(\d+(?:\.\d+)?)", text)
+    if m2:
+        val = round(float(m2.group(1)))
+        return {"min": val, "max": val, "currency": "CNY"}
+    return None
+
+
+def _price_midpoint(price_range: dict | None) -> int | None:
+    if not isinstance(price_range, dict):
+        return None
+    lo = price_range.get("min")
+    hi = price_range.get("max")
+    if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+        return round((lo + hi) / 2)
+    return None
+
+
+def _normalize_price_confidence(value, default: str = "unknown") -> str:
+    text = str(value or default).strip().lower()
+    return text if text in {"high", "medium", "low", "unknown"} else default
+
 
 def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
     provider_message = self.hotel_provider.message()
@@ -20,9 +50,9 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
         hotel_level=prefs["hotelLevel"],
         limit=6,
     )
-    candidates = self._parse_numbered_section(raw, "酒店候选")
+    candidates = _parse_numbered_section(raw, "酒店候选")
     fallback_price = _hotel_reference_price(prefs["hotelLevel"])
-    ai_price_estimates = _estimate_hotel_price_ranges(prefs, candidates)
+    ai_price_estimates = _estimate_hotel_price_ranges(prefs, candidates, deepseek_brain=self.deepseek_brain)
     for candidate in candidates:
         if isinstance(candidate.get("cost"), (int, float)) and candidate["cost"] > 0:
             candidate["cost_estimate"] = round(float(candidate["cost"]))
@@ -38,7 +68,7 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
         elif candidate.get("id") in ai_price_estimates:
             estimate = ai_price_estimates[candidate["id"]]
             price_range = estimate["price_range"]
-            candidate["cost_estimate"] = self._price_midpoint(price_range) or fallback_price
+            candidate["cost_estimate"] = _price_midpoint(price_range) or fallback_price
             candidate["cost_source"] = "ai_price_range"
             candidate["price_range"] = price_range
             candidate["price_confidence"] = estimate["price_confidence"]
@@ -61,7 +91,7 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
     status = "amap_fallback" if "provider_status=amap_fallback" in raw else self.hotel_provider.status()
     if status == "live":
         status = "amap_fallback"
-    area_recommendation = self._extract_prefixed_line(raw, "住宿区域建议")
+    area_recommendation = _extract_prefixed_line(raw, "住宿区域建议")
     if _is_generic_hotel_area(area_recommendation):
         area_recommendation = _hotel_area_from_candidates(prefs, candidates)
     return {
@@ -73,9 +103,10 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
     }
 
 def _estimate_hotel_price_ranges(
-    self,
     prefs: dict[str, Any],
     candidates: list[dict[str, Any]],
+    *,
+    deepseek_brain=None,
 ) -> dict[str, dict[str, Any]]:
     missing = [
         {
@@ -102,7 +133,9 @@ def _estimate_hotel_price_ranges(
             "必须提醒以酒店平台实时房价和房态为准",
         ],
     }
-    result = self.deepseek_brain.estimate_hotel_prices(payload)
+    if deepseek_brain is None:
+        return {}
+    result = deepseek_brain.estimate_hotel_prices(payload)
     if result.get("llm_status") != "used":
         return {}
 
@@ -111,7 +144,7 @@ def _estimate_hotel_price_ranges(
         if not isinstance(raw, dict):
             continue
         candidate_id = str(raw.get("candidate_id") or "").strip()
-        price_range = self._parse_price_range(raw.get("estimated_price_range"))
+        price_range = _parse_price_range(raw.get("estimated_price_range"))
         if not candidate_id or not price_range:
             continue
         price_range = {**price_range, "unit": "night"}
@@ -120,7 +153,7 @@ def _estimate_hotel_price_ranges(
             note = f"{note} 需以酒店平台实时房价和房态为准。".strip()
         estimates[candidate_id] = {
             "price_range": price_range,
-            "price_confidence": self._normalize_price_confidence(raw.get("price_confidence"), "low"),
+            "price_confidence": _normalize_price_confidence(raw.get("price_confidence"), "low"),
             "price_note": note or "AI 常识估算，需以酒店平台实时房价和房态为准。",
         }
     return estimates
@@ -133,10 +166,10 @@ def _is_generic_hotel_area(value: Any) -> bool:
     generic_markers = ["核心商圈", "地铁枢纽", "第一天重点景点", "交通枢纽"]
     return any(marker in text for marker in generic_markers)
 
-def _hotel_area_from_candidates(cls, prefs: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+def _hotel_area_from_candidates(prefs: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
     landmarks: list[str] = []
     for candidate in candidates[:4]:
-        for landmark in cls._hotel_nearby_landmarks(candidate):
+        for landmark in _hotel_nearby_landmarks(candidate):
             if landmark not in landmarks:
                 landmarks.append(landmark)
             if len(landmarks) >= 3:
@@ -145,10 +178,10 @@ def _hotel_area_from_candidates(cls, prefs: dict[str, Any], candidates: list[dic
             break
     if landmarks:
         return f"建议优先住在{'、'.join(landmarks)}周边，减少换乘和搬运行李。"
-    return cls._default_hotel_area(prefs)
+    return _default_hotel_area(prefs)
 
-def _hotel_nearby_label(cls, candidate: dict[str, Any]) -> str:
-    landmarks = cls._hotel_nearby_landmarks(candidate)
+def _hotel_nearby_label(candidate: dict[str, Any]) -> str:
+    landmarks = _hotel_nearby_landmarks(candidate)
     if landmarks:
         return f"近{'/'.join(landmarks[:2])}"
     address = str(candidate.get("address") or "").strip()
@@ -156,12 +189,12 @@ def _hotel_nearby_label(cls, candidate: dict[str, Any]) -> str:
         return f"位于{address}"
     return "位于候选酒店所在片区"
 
-def _hotel_nearby_landmarks(cls, candidate: dict[str, Any]) -> list[str]:
+def _hotel_nearby_landmarks(candidate: dict[str, Any]) -> list[str]:
     labels: list[str] = []
 
     def add(value: Any) -> None:
-        label = cls._clean_hotel_nearby_label(value)
-        if label and label not in labels and cls._looks_like_nearby_label(label):
+        label = _clean_hotel_nearby_label(value)
+        if label and label not in labels and _looks_like_nearby_label(label):
             labels.append(label)
 
     address = str(candidate.get("address") or "")
@@ -169,7 +202,7 @@ def _hotel_nearby_landmarks(cls, candidate: dict[str, Any]) -> list[str]:
         add(piece)
 
     for source in [candidate.get("type"), candidate.get("name")]:
-        text = cls._clean_hotel_nearby_label(source)
+        text = _clean_hotel_nearby_label(source)
         if not text:
             continue
         pattern = (

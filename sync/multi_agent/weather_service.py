@@ -17,11 +17,11 @@ def _build_weather(self, prefs: dict[str, Any]) -> dict[str, str]:
         result[city] = self.toolbox.call("get_weather", city=city, date=prefs["startDate"])
     return result
 
-def _build_weather_advice(self, weather: dict[str, str]) -> dict[str, str]:
+def _build_weather_advice(weather: dict[str, str]) -> dict[str, str]:
     text = " ".join(weather.values())
     has_rain = bool(re.search(r"雷阵雨|阵雨|小雨|中雨|大雨|暴雨|雨", text)) and "无雨" not in text
-    max_temp = self._max_temperature(text)
-    max_wind = self._max_wind_level(text)
+    max_temp = _max_temperature(text)
+    max_wind = _max_wind_level(text)
 
     if max_temp and max_temp >= 32:
         sun = "白天温度偏高，建议带防晒霜、帽子或墨镜，户外活动安排在上午或傍晚。"

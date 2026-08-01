@@ -10,6 +10,15 @@ from .text_parser import (
     _parse_numbered_section,
 )
 
+def _point_distance_km(start: dict, end: dict) -> float:
+    import math
+    lat1 = math.radians(float(start["lat"]))
+    lat2 = math.radians(float(end["lat"]))
+    delta_lat = lat2 - lat1
+    delta_lng = math.radians(float(end["lng"]) - float(start["lng"]))
+    haversine = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
+    return max(0.05, 6371.0 * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1 - haversine)))
+
 
 def _build_pois(self, prefs: dict[str, Any]) -> dict[str, Any]:
     raw = self.toolbox.call(
@@ -17,10 +26,10 @@ def _build_pois(self, prefs: dict[str, Any]) -> dict[str, Any]:
         city=prefs["destinationCity"],
         preference="、".join(prefs["interests"]),
     )
-    attractions = self._parse_numbered_section(raw, "景点/活动") or self._parse_numbered_section(raw, "经典景点")
-    real_foods = self._parse_numbered_section(raw, "美食/餐厅")
-    specialty_places = self._parse_numbered_section(raw, "特色店铺参考")
-    generic_foods = self._parse_numbered_section(raw, "地方特色美食")
+    attractions = _parse_numbered_section(raw, "景点/活动") or _parse_numbered_section(raw, "经典景点")
+    real_foods = _parse_numbered_section(raw, "美食/餐厅")
+    specialty_places = _parse_numbered_section(raw, "特色店铺参考")
+    generic_foods = _parse_numbered_section(raw, "地方特色美食")
     return {
         "attractions": attractions,
         "foods": real_foods or specialty_places or generic_foods,
@@ -28,15 +37,15 @@ def _build_pois(self, prefs: dict[str, Any]) -> dict[str, Any]:
         "raw": raw,
     }
 
-def _enrich_place_clusters(self, pois: dict[str, Any], hotels: dict[str, Any]) -> None:
+def _enrich_place_clusters(pois: dict[str, Any], hotels: dict[str, Any]) -> None:
     cluster_items: list[dict[str, Any]] = []
     for group_name in ["attractions", "specialty_places", "foods"]:
         for item in pois.get(group_name) or []:
-            point = self._normalize_point(item.get("location"))
+            point = _normalize_point(item.get("location"))
             if point:
                 cluster_items.append({"item": item, "point": point})
     for item in hotels.get("candidates") or []:
-        point = self._normalize_point(item.get("location"))
+        point = _normalize_point(item.get("location"))
         if point:
             cluster_items.append({"item": item, "point": point})
 
@@ -70,10 +79,10 @@ def _enrich_place_clusters(self, pois: dict[str, Any], hotels: dict[str, Any]) -
             item["cluster_name"] = cluster_name
             item["nearby_anchor"] = anchor
 
-def _nearest_cluster(self, point: dict[str, float], clusters: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _nearest_cluster(point: dict[str, float], clusters: list[dict[str, Any]]) -> dict[str, Any] | None:
     nearest = None
     for cluster in clusters:
-        distance = self._point_distance_km(point, cluster["center"])
+        distance = _point_distance_km(point, cluster["center"])
         if nearest is None or distance < nearest["distance_km"]:
             nearest = {"cluster": cluster, "distance_km": distance}
     return nearest
