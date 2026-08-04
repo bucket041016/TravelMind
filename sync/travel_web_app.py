@@ -329,6 +329,11 @@ def index():
     return FileResponse(WEB_DIR / "index.html")
 
 
+@app.get("/v2")
+def index_v2():
+    return FileResponse(WEB_DIR / "index_v2.html")
+
+
 @app.get("/api/tools")
 def list_tools():
     try:
