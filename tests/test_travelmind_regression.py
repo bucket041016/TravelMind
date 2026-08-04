@@ -136,6 +136,7 @@ class TravelMindRegressionTests(unittest.TestCase):
             {"destinationCity": "深圳", "localModes": ["transit", "taxi", "walking"]},
             {"recommended_modes": ["transit", "taxi", "walking"], "notes": []},
             [day],
+            toolbox=toolbox,
         )
 
         self.assertEqual(len(result["segments"]), 1)
@@ -175,6 +176,7 @@ class TravelMindRegressionTests(unittest.TestCase):
             {"destinationCity": "深圳", "localModes": ["transit"]},
             {"recommended_modes": ["transit"], "notes": []},
             [day],
+            toolbox=toolbox,
         )
 
         self.assertEqual(result["segments"][0]["source"], "rule_fallback")
@@ -227,6 +229,8 @@ class TravelMindRegressionTests(unittest.TestCase):
             {"recommended_modes": ["transit", "taxi"], "notes": []},
             [day],
             {},
+            toolbox=toolbox,
+            deepseek_brain=planner.deepseek_brain,
         )
 
         segment = result["segments"][0]
@@ -286,6 +290,7 @@ class TravelMindRegressionTests(unittest.TestCase):
             {"recommended_modes": ["taxi"], "notes": []},
             [day],
             pois,
+            deepseek_brain=planner.deepseek_brain,
         )
 
         self.assertEqual(day["items"][1]["location"], "C近景点")
@@ -331,6 +336,8 @@ class TravelMindRegressionTests(unittest.TestCase):
             {"recommended_modes": ["transit"], "notes": []},
             [day],
             {},
+            toolbox=toolbox,
+            deepseek_brain=planner.deepseek_brain,
         )
 
         segment = result["segments"][0]
