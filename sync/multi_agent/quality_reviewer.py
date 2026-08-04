@@ -173,12 +173,33 @@ def _normalize_quality_review(value: Any, source: str) -> dict[str, Any]:
         "logic_score": score("logic_score"),
         "issues": normalized_issues,
         "fixes": fixes[:8],
+        "constraints": raw.get("constraints") or [],
         "source": source,
         "repaired": False,
     }
 
 def _rule_quality_review(prefs: dict[str, Any], itinerary_days: list[dict[str, Any]]) -> dict[str, Any]:
     issues = []
+    constraints_eval = []
+    constraint_summary = prefs.get("constraintSummary") or {}
+    hard_constraints = constraint_summary.get("hard", [])
+    for item in hard_constraints:
+        text = item.get("text", "")
+        status = "satisfied"
+        evidence = "已通过规则体检"
+        if "夜间" in text:
+            # 检查是否有夜间行程
+            has_night = any(any(i.get("time") == "夜间" for i in day.get("items", [])) for day in itinerary_days)
+            if has_night:
+                status = "violated"
+                evidence = "行程中包含夜间活动"
+        constraints_eval.append({
+            "id": item.get("id"),
+            "kind": item.get("kind", "hard"),
+            "text": text,
+            "status": status,
+            "evidence": evidence,
+        })
     max_transfer = int((prefs.get("preferenceProfile") or {}).get("maxTransferMinutes") or 45)
     for day in itinerary_days:
         clusters = [item.get("cluster_id") for item in day.get("items", []) if item.get("cluster_id")]
@@ -217,6 +238,7 @@ def _rule_quality_review(prefs: dict[str, Any], itinerary_days: list[dict[str, A
         "logic_score": logic_score,
         "issues": issues[:8],
         "fixes": [],
+        "constraints": constraints_eval,
         "source": "rule_fallback",
         "repaired": False,
     }

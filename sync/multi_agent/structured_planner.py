@@ -370,6 +370,36 @@ class StructuredTravelPlanner:
         if isinstance(interests, str):
             interests = [item for item in re.split(r"[、,，\s]+", interests) if item]
 
+        free_text = str(payload.get("freeText") or "").strip()
+        hard_constraints = payload.get("hardConstraints") or []
+        soft_preferences = payload.get("softPreferences") or []
+        if isinstance(hard_constraints, str):
+            hard_constraints = [item.strip() for item in re.split(r"[;；\n]+", hard_constraints) if item.strip()]
+        if isinstance(soft_preferences, str):
+            soft_preferences = [item.strip() for item in re.split(r"[;；\n]+", soft_preferences) if item.strip()]
+
+        hard_list = [{"id": f"c-h-{i}", "kind": "hard", "text": text, "source": "input"} for i, text in enumerate(hard_constraints)]
+        soft_list = [{"id": f"c-s-{i}", "kind": "soft", "text": text, "source": "input"} for i, text in enumerate(soft_preferences)]
+        unknown_list = []
+        if free_text:
+            parts = [p.strip().rstrip("。.") for p in re.split(r"[;；\n]+", free_text) if p.strip()]
+            for p in parts:
+                if any(kw in p for kw in ["不要", "必须", "仅"]):
+                    if p not in [item["text"] for item in hard_list]:
+                        hard_list.append({"id": f"c-h-{len(hard_list)}", "kind": "hard", "text": p, "source": "freeText"})
+                elif any(kw in p for kw in ["希望", "优先", "尽可能"]):
+                    if p not in [item["text"] for item in soft_list]:
+                        soft_list.append({"id": f"c-s-{len(soft_list)}", "kind": "soft", "text": p, "source": "freeText"})
+                else:
+                    if p not in [item["text"] for item in unknown_list]:
+                        unknown_list.append({"id": f"c-u-{len(unknown_list)}", "kind": "unknown", "text": p, "source": "freeText"})
+
+        constraint_summary = {
+            "hard": hard_list,
+            "soft": soft_list,
+            "unknown": unknown_list,
+        }
+
         return {
             "originCity": origin,
             "destinationCity": destination,
@@ -383,6 +413,29 @@ class StructuredTravelPlanner:
             "interests": list(dict.fromkeys(str(item).strip() for item in interests if str(item).strip())),
             "estimatedDistanceKm": self._estimate_distance(origin, destination),
             "preferenceProfile": preference_profile,
+            "freeText": free_text,
+            "hardConstraints": [item["text"] for item in hard_list],
+            "softPreferences": [item["text"] for item in soft_list],
+            "constraintSummary": constraint_summary,
+        }
+
+    @staticmethod
+    def _build_candidate_contracts(prefs: dict[str, Any], pois: dict[str, Any], hotels: dict[str, Any], weather: Any) -> dict[str, Any]:
+        _normalize_and_rank_pois(pois, prefs, weather)
+        _normalize_and_rank_hotels(hotels, prefs)
+        attractions = [p for p in pois.get("attractions", []) if (p.get("location") or p.get("is_real_place")) and p.get("selection", {}).get("status") != "rejected"]
+        foods = [p for p in pois.get("foods", []) if (p.get("location") or p.get("is_real_place")) and p.get("selection", {}).get("status") != "rejected"]
+        specialty = [p for p in pois.get("specialty_places", []) if (p.get("location") or p.get("is_real_place")) and p.get("selection", {}).get("status") != "rejected"]
+        hotel_list = [h for h in hotels.get("candidates", []) if (h.get("location") or h.get("is_real_place")) and h.get("selection", {}).get("status") != "rejected"]
+        return {
+            "version": "travelmind-candidate-v1",
+            "contract_version": "travelmind-candidate-v1",
+            "pois": {
+                "attractions": attractions,
+                "foods": foods,
+                "specialty_places": specialty,
+            },
+            "hotels": hotel_list,
         }
 
     @staticmethod

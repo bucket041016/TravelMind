@@ -296,15 +296,25 @@ def _planning_brain_payload(
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     candidates = []
     lookup: dict[str, dict[str, Any]] = {}
-    groups = [
-        ("activity", "amap_poi", _dedupe_pois(pois.get("attractions"))[:12]),
-        ("activity", "amap_poi", _dedupe_pois(pois.get("specialty_places"))[:8]),
-        ("food", "amap_poi", _dedupe_pois(pois.get("foods"))[:12]),
-        ("hotel", "hotel_poi", _dedupe_pois(hotels.get("candidates"))[:6]),
-    ]
+    poi_contracts = pois.get("candidate_contracts") if isinstance(pois.get("candidate_contracts"), dict) else {}
+    hotel_contracts = hotels.get("candidate_contracts") if isinstance(hotels.get("candidate_contracts"), list) else hotels.get("candidates")
+    if poi_contracts:
+        groups = [
+            ("activity", "amap_poi", poi_contracts.get("attractions", [])),
+            ("activity", "amap_poi", poi_contracts.get("specialty_places", [])),
+            ("food", "amap_poi", poi_contracts.get("foods", [])),
+            ("hotel", "hotel_poi", _dedupe_pois(hotel_contracts or [])[:6]),
+        ]
+    else:
+        groups = [
+            ("activity", "amap_poi", _dedupe_pois(pois.get("attractions"))[:12]),
+            ("activity", "amap_poi", _dedupe_pois(pois.get("specialty_places"))[:8]),
+            ("food", "amap_poi", _dedupe_pois(pois.get("foods"))[:12]),
+            ("hotel", "hotel_poi", _dedupe_pois(hotels.get("candidates"))[:6]),
+        ]
     for category, place_source, items in groups:
         for item in items:
-            if not item.get("id") or not item.get("name"):
+            if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
                 continue
             enriched = dict(item)
             enriched["_candidate_category"] = category
@@ -326,6 +336,7 @@ def _planning_brain_payload(
                     "cluster_id": item.get("cluster_id", ""),
                     "cluster_name": item.get("cluster_name", ""),
                     "nearby_anchor": item.get("nearby_anchor", ""),
+                    "selection": item.get("selection"),
                 }
             )
 
@@ -359,7 +370,10 @@ def _planning_brain_payload(
             "不要编造航班号、车次、实时票价、余票、酒店库存或门票库存",
             "最后一天返程交通只作为 transfer，不要把住宿区域建议写进返程 item 的 location 或 detail",
             "高德没有 cost 的景点/活动，只有明确可能收费时才输出正价 estimated_price_range；免费开放或无法判断收费时输出 0-0，并标注需核实",
+            *(prefs.get("hardConstraints") or []),
+            *(prefs.get("softPreferences") or []),
         ],
+        "constraint_summary": prefs.get("constraintSummary") or {},
     }
     return payload, lookup
 
