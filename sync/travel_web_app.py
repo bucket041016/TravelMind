@@ -189,6 +189,9 @@ class PlanRequest(BaseModel):
     hotelLevel: str = "舒适"
     interests: list[str] = Field(default_factory=lambda: ["经典景点", "美食", "地方特色"])
     preferenceProfile: dict[str, object] = Field(default_factory=dict)
+    freeText: str = ""
+    hardConstraints: list[str] = Field(default_factory=list)
+    softPreferences: list[str] = Field(default_factory=list)
 
 
 app = FastAPI(title="TravelMind Agent Demo", version="0.1.0")

@@ -168,7 +168,8 @@ button {
 
 .trip-form input[type="text"],
 .trip-form input[type="date"],
-.trip-form input[type="number"] {
+.trip-form input[type="number"],
+.trip-form textarea {
   width: 100%;
   min-height: 38px;
   padding: 8px 10px;
@@ -179,7 +180,14 @@ button {
   outline: none;
 }
 
-.trip-form input:focus {
+.trip-form textarea {
+  min-height: 76px;
+  max-height: 180px;
+  resize: vertical;
+}
+
+.trip-form input:focus,
+.trip-form textarea:focus {
   border-color: rgba(20, 121, 201, 0.6);
   box-shadow: 0 0 0 3px rgba(20, 121, 201, 0.1);
 }
