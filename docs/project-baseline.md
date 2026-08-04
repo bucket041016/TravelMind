@@ -1,6 +1,7 @@
 # TravelMind 项目认知基线
 
-更新时间：2026-07-31
+> 整理自根目录 `PROJECT_BASELINE.md`，2026-08-04 合并；代码根目录为 `my-langgraph-agent-main/`。
+> 原文件更新时间：2026-07-31。
 
 ## 1. 一句话定位
 
@@ -13,10 +14,9 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 ## 2. 当前仓库状态
 
 - 分支：`main`
-- HEAD：`2cf8ec8 Initial commit`
-- 勘察前工作区：干净
-- 本次认知与执行文件：`PROJECT_BASELINE.md`、`OPEN_SOURCE_COMPARISON.md`、`findings.md`、`progress.md`、`task_plan.md`、`IMPLEMENTATION_PLAN.md`、`CONTINUATION_SUMMARY.md`
-- 当前工作区包含 Phase 1/Phase 2 业务改动、离线评测和执行文档；已有未跟踪 `AGENTS.md` 保持原样。
+- HEAD：`2cf8ec8 Initial commit`（原勘察时记录；以实际 `git status` 为准）
+- 认知与执行文档现位于 `docs/`（2026-08-04 整理后），根目录同名文件为历史留档。
+- 工作区包含 Phase 1/Phase 2 业务改动、离线评测和执行文档。
 
 ## 3. 架构总览
 
@@ -70,7 +70,9 @@ flowchart LR
 | `web/styles.css` | 页面布局、结果模块、响应式和打印样式 | 当前视觉样式 |
 | `web/index_v2.html`、`web/styles_v2.css` | 另一版静态资产 | 当前入口未引用 |
 | `tests/test_travelmind_regression.py` | 规划器和前端契约回归 | 当前测试入口 |
+| `tests/evals/` | 离线评测场景、fixture、指标和报告 | 效果护栏 |
 | `async/` | 独立异步 ReAct/MCP/用户 API 示例 | 遗留实验区 |
+| `docs/` | 合并后的文档体系与历史归档 | 认知入口 |
 
 ## 5. 后端接口契约
 
@@ -163,7 +165,7 @@ $env:MCP_SERVER_URL='http://127.0.0.1:8098/my-custom-path'
 - 初始状态显示结构化表单、快捷演示、MCP 工具清单和追问区。
 - 点击规划后调用 `/api/plan`，显示 8 个阶段的前端进度。
 - 结果页将每日行程放在主体位置，路线、精选 POI、地图、住宿、预算和天气作为支持模块。
-- 表单包含“补充要求”输入；生成结果后质量体检区域显示逐条约束状态和证据。
+- 表单包含"补充要求"输入；生成结果后质量体检区域显示逐条约束状态和证据。
 - `localStorage` 保存当前计划、追问、活动标签和轻量偏好；旧快照缺字段时进行归一化和提示。
 - 编辑模式支持每日活动上移、下移和删除，之后在浏览器端重建相邻地点路线、预算和 Markdown。
 - 导出支持 Markdown 下载和浏览器打印保存 PDF。
@@ -185,7 +187,7 @@ python -m unittest discover -s tests -v：38 个通过
 git diff --check：通过
 ```
 
-当前探测到 8010 和 8098 均没有监听进程，因此本轮未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。
+当时探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证（验证结果以 `docs/implementation-plan.md` 的最新记录为准）。
 
 ## 10. 后续开发的优先关注点
 
@@ -205,3 +207,4 @@ git diff --check：通过
 - 改前端状态和结果：`web/app.js`
 - 改视觉与响应式：`web/styles.css`
 - 改回归契约：`tests/test_travelmind_regression.py`
+- 改离线评测：`tests/evals/`

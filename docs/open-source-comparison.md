@@ -1,6 +1,6 @@
 # TravelMind GitHub 同类项目对比与优化方案
 
-更新时间：2026-07-31
+> 整理自根目录 `OPEN_SOURCE_COMPARISON.md`，2026-08-04 合并。原文件更新时间：2026-07-31。
 
 本报告基于 GitHub Repository Search、公开仓库 README、目录树和部分核心源码的公开内容整理。Star 数为检索时快照，项目状态和依赖会随时间变化；正式引入前仍需单独核对许可证、接口可用性和供应商条款。
 
@@ -8,7 +8,7 @@
 
 TravelMind 当前的基础选型没有明显方向性错误：Python + FastAPI + LangGraph/LangChain + FastMCP + 高德 + DeepSeek 已经覆盖了事实获取、规划、工具协议和 Web 展示。
 
-“生成结果不够智能”的主要矛盾集中在规划闭环，而不是单纯模型能力：
+"生成结果不够智能"的主要矛盾集中在规划闭环，而不是单纯模型能力：
 
 - 用户自由文本约束没有进入结构化 `/api/plan` 请求。
 - 候选地点有事实字段，但缺少统一的候选评分和全局选择策略。
@@ -22,7 +22,7 @@ TravelMind 当前的基础选型没有明显方向性错误：Python + FastAPI +
 
 1. `bcefghj/multi-agent-travel-planner` 的预算反馈循环。
 2. `datarootsio/langgraph-template-travel-planner` 的 typed state、条件边、HITL、checkpoint 和 Langfuse 观测。
-3. `kbhujbal/Multi-Agent-AI-Travel-Advisor` 的“纯 API 数据层 / AI 分析层”分离和 RAG。
+3. `kbhujbal/Multi-Agent-AI-Travel-Advisor` 的"纯 API 数据层 / AI 分析层"分离和 RAG。
 4. `Y-66/Traveler` 的 MCP、Skills、Memory、Knowledge Base、Team/Workflow 分层。
 5. `LeeFly-cn/TripStar-Java` 的高德事实校准、结构化 DTO、独立 Review、WebSocket 进度和 Trace。
 6. `BjornMelin/tripsage-ai` 的 schema-first 输出、混合 RAG、持久化、缓存、后台任务和 E2E 质量门禁。
@@ -33,9 +33,9 @@ TravelMind 当前的基础选型没有明显方向性错误：Python + FastAPI +
 |---|---|---|---|---|---|---|
 | [bcefghj/multi-agent-travel-planner](https://github.com/bcefghj/multi-agent-travel-planner) | 目的地、航班、酒店、活动、预算、每日行程 | Preference -> Destination -> 三路并行搜索 -> Budget；超预算最多 3 轮调整 | Python/FastAPI/asyncio；另有 Java Spring Boot、Go Gin；Pydantic；Streamlit | 编排容易解释；并行清晰；预算循环直接改善结果；有测试和架构文档 | 默认 Mock 数据；真实地点和实时供应商闭环较弱；三语言维护成本高 | 直接借鉴预算反馈循环、状态字段和阶段化 Agent |
 | [datarootsio/langgraph-template-travel-planner](https://github.com/datarootsio/langgraph-template-travel-planner) | 旅行参数提取、缺参补全、路由、对话、MCP、人工介入 | LangGraph StateGraph + router + conditional edges + `interrupt_before` + checkpoint | Python 3.13；LangGraph；MCP adapters；OpenAI；Reflex；Langfuse；Pydantic | 工程骨架清晰；缺参时进入 HITL；追踪和评估入口完整；容易迁移到其他 Agent 产品 | 更像模板而非旅行事实产品；默认 MemorySaver 仍需持久化改造；依赖版本较新 | 借鉴图式编排、人工补充关键条件、可恢复状态和观测体系 |
-| [kbhujbal/Multi-Agent-AI-Travel-Advisor](https://github.com/kbhujbal/Multi-Agent-AI-Travel-Advisor) | 航班、住宿、活动、物流、文化/签证知识、行程合成 | 4 个纯 HTTP 服务并行 -> RAG Knowledge Expert -> Itinerary Compiler；AI 不直接抓事实 | Python；FastAPI；httpx/asyncio；CrewAI；LangChain；ChromaDB；React/Vite | “事实服务与 AI 分析”边界清楚；真实 API 优先；RAG 只提供知识补充；架构易测试 | API Key 数量多；供应商稳定性和费用高；CrewAI 与现有 LangGraph 不能直接复用 | 借鉴数据层隔离、统一服务接口、RAG 位置和并行搜索 |
-| [Y-66/Traveler](https://github.com/Y-66/Traveler) | 多轮对话、团队协作、工作流、MCP、Memory、Skills、RAG、航班/酒店/景点工具 | Agno Agent/Team/Workflow；Research -> Budget -> Plan；技能和知识库插件化 | Python 3.12；Agno；FastAPI；ChromaDB/LanceDB；SQLite/SQLAlchemy；Typer；Loguru | 对“智能感”的组成拆得完整；长期偏好、知识库和技能可复用；支持离线/无 MCP 模式 | Agno 生态迁移成本；功能面容易变大；知识库质量和 Memory 污染需要治理 | 借鉴 Memory、目的地知识、Skills 和 workflow 分层，不直接更换框架 |
-| [LeeFly-cn/TripStar-Java](https://github.com/LeeFly-cn/TripStar-Java) | 自主规划、指定小红书笔记规划、多模态图片理解、高德 POI/天气/酒店/餐饮、地图、预算、知识图谱 | StateGraph + ReactAgent；Research -> POI/天气/酒店 -> Planner -> Review；WebSocket 任务流 | Java 21；Spring Boot 4；Spring AI Alibaba；React；MySQL；Redis；Node.js 小红书运行时 | 真实事实校准强；每阶段 DTO 清晰；Review 独立；Trace 和实时进度完整；产品闭环成熟 | 依赖重；小红书签名/Cookie/风控和多服务运维复杂；GPL-2.0 需谨慎评估 | 借鉴结构化 DTO、任务状态、Review、Trace、实时进度和“指定攻略导入”思路 |
+| [kbhujbal/Multi-Agent-AI-Travel-Advisor](https://github.com/kbhujbal/Multi-Agent-AI-Travel-Advisor) | 航班、住宿、活动、物流、文化/签证知识、行程合成 | 4 个纯 HTTP 服务并行 -> RAG Knowledge Expert -> Itinerary Compiler；AI 不直接抓事实 | Python；FastAPI；httpx/asyncio；CrewAI；LangChain；ChromaDB；React/Vite | "事实服务与 AI 分析"边界清楚；真实 API 优先；RAG 只提供知识补充；架构易测试 | API Key 数量多；供应商稳定性和费用高；CrewAI 与现有 LangGraph 不能直接复用 | 借鉴数据层隔离、统一服务接口、RAG 位置和并行搜索 |
+| [Y-66/Traveler](https://github.com/Y-66/Traveler) | 多轮对话、团队协作、工作流、MCP、Memory、Skills、RAG、航班/酒店/景点工具 | Agno Agent/Team/Workflow；Research -> Budget -> Plan；技能和知识库插件化 | Python 3.12；Agno；FastAPI；ChromaDB/LanceDB；SQLite/SQLAlchemy；Typer；Loguru | 对"智能感"的组成拆得完整；长期偏好、知识库和技能可复用；支持离线/无 MCP 模式 | Agno 生态迁移成本；功能面容易变大；知识库质量和 Memory 污染需要治理 | 借鉴 Memory、目的地知识、Skills 和 workflow 分层，不直接更换框架 |
+| [LeeFly-cn/TripStar-Java](https://github.com/LeeFly-cn/TripStar-Java) | 自主规划、指定小红书笔记规划、多模态图片理解、高德 POI/天气/酒店/餐饮、地图、预算、知识图谱 | StateGraph + ReactAgent；Research -> POI/天气/酒店 -> Planner -> Review；WebSocket 任务流 | Java 21；Spring Boot 4；Spring AI Alibaba；React；MySQL；Redis；Node.js 小红书运行时 | 真实事实校准强；每阶段 DTO 清晰；Review 独立；Trace 和实时进度完整；产品闭环成熟 | 依赖重；小红书签名/Cookie/风控和多服务运维复杂；GPL-2.0 需谨慎评估 | 借鉴结构化 DTO、任务状态、Review、Trace、实时进度和"指定攻略导入"思路 |
 | [BjornMelin/tripsage-ai](https://github.com/BjornMelin/tripsage-ai) | 多工具搜索、航班、住宿、路线、预算、记忆、协作、文件和工具审批 | Next.js server-first；AI SDK ToolLoop/structured output；RAG + memory；QStash 后台任务 | Next.js 16；React 19；TypeScript 6；Vercel AI SDK v7；Supabase/pgvector/RLS；Upstash Redis/QStash；OpenTelemetry；Playwright | schema-first；持久化、缓存、限流、幂等、观测、E2E 和安全边界完整；更接近产品工程 | 基础设施复杂；强绑定 Vercel/Supabase/Upstash；部署成本和学习成本高 | 借鉴结构化输出、持久化、缓存、任务幂等、工具审批和质量门禁 |
 | [nishant-sharma-99/PlanetPath-AI-Travel-Planner](https://github.com/nishant-sharma-99/PlanetPath-AI-Travel-Planner) | 航班、酒店、日程、路线地图、PDF、会话恢复 | LangGraph Supervisor -> Flight/Hotel/Itinerary/Final；PostgreSQL checkpointer | FastAPI；LangGraph；Groq；AviationStack；Tavily；Nominatim；PostgreSQL | 和 TravelMind 同为 Python/FastAPI/LangGraph；真实航班/搜索数据；Postgres 会话状态；端到端形态简洁 | 规划约束较少；酒店主要依赖 Web 搜索；Supervisor 和最终文本之间的结构化校验较薄 | 借鉴 thread/checkpoint、任务接口和持久化会话，避免仅依赖浏览器 localStorage |
 
@@ -101,7 +101,7 @@ TravelMind 适合先做轻量版本：
 
 | 能力 | 当前状态 | 结果影响 | 优先级 |
 |---|---|---|---|
-| 自由文本约束 | 页面只有固定字段，结构化请求缺少 `free_text` | “带老人、少走路、一定去某处、不要某处”等信息容易丢失 | P0 |
+| 自由文本约束 | 页面只有固定字段，结构化请求缺少 `free_text` | "带老人、少走路、一定去某处、不要某处"等信息容易丢失 | P0 |
 | 候选数据 | 高德优先，但工具多返回文本，规划器用正则解析 | 候选字段不稳定，难以做可靠排序 | P0 |
 | 候选排序 | 有去重、片区和局部规则，缺少统一评分 | 选择看起来像模板，个性化弱 | P0 |
 | 预算优化 | 末端计算，超支只给建议 | 结果没有闭环调整 | P0 |
@@ -111,7 +111,7 @@ TravelMind 适合先做轻量版本：
 | Memory | 仅浏览器端少量 hint | 多次使用后仍需重复说明 | P1 |
 | RAG | 当前没有目的地知识库 | 预约、季节、文化和本地规则解释有限 | P1 |
 | 任务状态 | 同步长请求，前端模拟进度 | 延迟高时缺少可恢复性和真实反馈 | P1 |
-| 质量评测 | 22 个回归测试，缺少效果指标 | 很难判断“更智能”是否真的改善 | P0 |
+| 质量评测 | 22 个回归测试，缺少效果指标 | 很难判断"更智能"是否真的改善 | P0 |
 
 ## 5. 推荐目标架构
 
@@ -155,7 +155,7 @@ flowchart TD
 
 ## 6. 分阶段实现方案
 
-### Phase 0：建立“智能程度”评测基线
+### Phase 0：建立"智能程度"评测基线
 
 目标：先让效果可以被比较。
 
@@ -180,11 +180,11 @@ flowchart TD
 - 追问不再只生成文本回答，而是判断意图：解释、修改、替换、重新规划；修改类请求进入局部修复图。
 - 初期用 SQLite/本地 JSON 保存 `plan_id`、版本、原始约束和 trace，暂不引入分布式基础设施。
 
-验收：用户说“第二天少走路、不要公交、保留某景点、预算降到某值”后，结果页的每日行程、路线和预算同步变化；旧的 `/api/multi-agent-chat` 继续保留兼容。
+验收：用户说"第二天少走路、不要公交、保留某景点、预算降到某值"后，结果页的每日行程、路线和预算同步变化；旧的 `/api/multi-agent-chat` 继续保留兼容。
 
 ### Phase 2：结构化事实与候选排序
 
-目标：让模型从“更好的候选集合”中做选择，而不是直接面对文本。
+目标：让模型从"更好的候选集合"中做选择，而不是直接面对文本。
 
 工作内容：
 
@@ -192,7 +192,7 @@ flowchart TD
 - 在 `sync` 下新增 provider/contract 层；保留旧文本解析作为兼容 fallback。
 - 建立候选硬过滤：城市、类别、坐标、去重、地点来源、返程规则、已满足的必须项。
 - 建立可解释软评分：偏好命中、评分、费用、片区一致性、与上一站距离、天气适配、住宿策略和用户节奏。
-- 每个候选输出 `score_breakdown`，前端展示“为何入选”和“数据来源”。
+- 每个候选输出 `score_breakdown`，前端展示"为何入选"和"数据来源"。
 
 建议评分形式：
 
@@ -211,7 +211,7 @@ flowchart TD
 
 ### Phase 3：把行程生成升级为有限状态图
 
-目标：形成“研究 -> 组合 -> 校验 -> 修复 -> 输出”的真正闭环。
+目标：形成"研究 -> 组合 -> 校验 -> 修复 -> 输出"的真正闭环。
 
 建议节点：
 
@@ -254,13 +254,13 @@ flowchart TD
 
 ### Phase 5：前端呈现与质量闭环
 
-目标：让用户感知到“智能”来自可解释的选择和可控的调整。
+目标：让用户感知到"智能"来自可解释的选择和可控的调整。
 
 工作内容：
 
 - 结果页增加约束摘要、候选选择理由、来源时间、路线总耗时、预算调整 diff 和质量评分。
-- 追问后展示“修改了什么、保留了什么、哪些约束仍未满足”。
-- 提供“严格满足 / 更省钱 / 更轻松”三种优化动作，映射到同一计划修复 API。
+- 追问后展示"修改了什么、保留了什么、哪些约束仍未满足"。
+- 提供"严格满足 / 更省钱 / 更轻松"三种优化动作，映射到同一计划修复 API。
 - 显示候选替代项，让用户能快速选择而非重新输入整段需求。
 - 真实事件驱动进度，保留失败阶段、重试次数和降级原因。
 - Playwright 覆盖桌面、移动端、规划、追问、编辑、恢复和导出；效果评测和浏览器 E2E 都纳入 CI 门禁。
@@ -274,7 +274,7 @@ flowchart TD
 3. 候选 JSON contract + 可解释排序。
 4. 预算超支的有限反馈循环。
 
-这四项直接命中“结果不够智能”的用户感知，同时仍能沿用现有高德、DeepSeek、FastAPI 和前端结构。RAG、Memory、WebSocket、UI 深化作为第二轮，框架迁移不列入计划。
+这四项直接命中"结果不够智能"的用户感知，同时仍能沿用现有高德、DeepSeek、FastAPI 和前端结构。RAG、Memory、WebSocket、UI 深化作为第二轮，框架迁移不列入计划。
 
 ## 8. 关键取舍
 

@@ -1,5 +1,7 @@
 # TravelMind: Multi-Agent + MCP 智慧出行 Agent
 
+> 整理自根目录 `TRAVELMIND_README.md`，2026-08-04 合并；修复了对已删除文件 `MULTI_AGENT_UPGRADE.md` 的引用，并更新了项目路径。产品对外介绍以此文档为准。
+
 TravelMind 是一个基于多 Agent 编排和 MCP 工具协议的智慧出行助手。用户可以用自然语言提出出行需求，系统会拆分为需求理解、天气风险、高德路线、景点美食、预算评估和行程写作等专业 Agent，并调用真实工具生成结构化旅行方案。
 
 ## 项目亮点
@@ -12,7 +14,7 @@ TravelMind 是一个基于多 Agent 编排和 MCP 工具协议的智慧出行助
 - 文件生成：Agent 可将完整行程保存为 Markdown 文件，输出到 `outputs/`。
 - 简历友好：能讲清楚 Agent 编排、MCP 协议、外部 API 接入、失败降级和可视化观测。
 
-> 设计参考见 [MULTI_AGENT_UPGRADE.md](MULTI_AGENT_UPGRADE.md)，吸收 `bcefghj/multi-agent-travel-planner` 的 Pipeline + 并行执行思想，并结合本项目的高德 MCP 工具做真实增强。
+> 架构思路吸收 `bcefghj/multi-agent-travel-planner` 的 Pipeline + 并行执行思想，并结合本项目的高德 MCP 工具做真实增强；详见 [open-source-comparison.md](open-source-comparison.md)。
 
 ## 系统架构
 
@@ -44,7 +46,7 @@ flowchart TD
     File --> Output["outputs/*.md"]
 ```
 
-项目仍保留 `/api/chat` 的 LangGraph ReAct 单 Agent 入口，方便对比“单 Agent 工具调用”和“多 Agent 专业分工”的效果。
+项目仍保留 `/api/chat` 的 LangGraph ReAct 单 Agent 入口，方便对比"单 Agent 工具调用"和"多 Agent 专业分工"的效果。
 
 ## MCP 工具
 
@@ -61,10 +63,10 @@ flowchart TD
 
 ## 启动方式
 
-准备环境：
+准备环境（代码根目录为 `my-langgraph-agent-main/`）：
 
 ```powershell
-cd D:\Codexwork\my-langgraph-agent-main
+cd D:\Codexwork\Gold-WC\my-langgraph-agent-main
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt fastmcp
@@ -97,7 +99,7 @@ ENABLE_AMAP_REMOTE_MCP=false
 终端 1 启动 MCP Server：
 
 ```powershell
-cd D:\Codexwork\my-langgraph-agent-main
+cd D:\Codexwork\Gold-WC\my-langgraph-agent-main
 $env:MCP_PORT="8098"
 .\.venv\Scripts\python.exe sync\fastmcp_server_streamhttp.py
 ```
@@ -105,7 +107,7 @@ $env:MCP_PORT="8098"
 终端 2 启动 Web Demo：
 
 ```powershell
-cd D:\Codexwork\my-langgraph-agent-main
+cd D:\Codexwork\Gold-WC\my-langgraph-agent-main
 $env:MCP_SERVER_URL="http://127.0.0.1:8098/my-custom-path"
 .\.venv\Scripts\python.exe -m uvicorn sync.travel_web_app:app --host 127.0.0.1 --port 8010
 ```

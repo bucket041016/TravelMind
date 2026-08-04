@@ -1,14 +1,13 @@
 # TravelMind 智能规划优化执行计划
 
-更新时间：2026-07-31  
-当前状态：Phase 2 进行中：先完成事实 Contract 与离线纯逻辑测试  
-适用分支：`main`
+> 合并自根目录 `IMPLEMENTATION_PLAN.md`（执行合同）、`task_plan.md`（任务看板）和 `progress.md`（过程记录），2026-08-04 去重整理；代码根目录为 `my-langgraph-agent-main/`。
+> 阶段结果只保留一份（以执行合同为准），任务看板与错误记录并入本文；后续每个 Phase/小步都更新本文。
 
 ## 1. 总目标
 
 在保留现有 Python + FastAPI + LangGraph/LangChain + FastMCP + 高德 + DeepSeek 技术栈和既有响应字段兼容性的前提下，提升 TravelMind 的规划智能度、事实可靠性、约束满足率和可解释性。
 
-“智能”在本计划中不只指生成文案，更具体地定义为：
+"智能"在本计划中不只指生成文案，更具体地定义为：
 
 - 能理解并执行用户的硬约束、软偏好和自由文本要求。
 - 优先使用真实、可定位、与目的地匹配的地点，而不是泛化或重复推荐。
@@ -46,12 +45,12 @@
 ## 4. 执行原则
 
 1. 每次只推进一个 Phase，完成验收后再进入下一 Phase。
-2. 每个 Phase 先读本文件和 `PROJECT_BASELINE.md`，再编辑限定范围内的文件。
+2. 每个 Phase 先读 `docs/project-baseline.md` 和本文，再编辑限定范围内的文件。
 3. 先添加测试/fixture，再改业务逻辑；先保证可观察，再提高复杂度。
 4. 维持现有响应字段；新增字段使用可选字段，不破坏旧前端。
 5. 外部服务调用都必须有超时、降级和可记录的来源状态。
 6. 每轮改动都运行最小相关测试，再运行全量回归。
-7. 每个 Phase 结束时更新 `task_plan.md`、`progress.md`，必要时补充 `findings.md`。
+7. 每个 Phase 结束时更新本文（看板/结果）和 `docs/findings.md`。
 8. 发现与计划不符的架构事实时，先记录事实和影响，暂停当前 Phase 的扩散性改动。
 
 ## 5. 阶段总览
@@ -71,24 +70,24 @@
 
 ### 目标
 
-在不修改规划业务行为的情况下，建立一套可重复运行的输入、工具结果、模型结果和评分指标，先准确回答“当前效果哪里不够智能”。
+在不修改规划业务行为的情况下，建立一套可重复运行的输入、工具结果、模型结果和评分指标，先准确回答"当前效果哪里不够智能"。
 
 ### 文件范围
 
 - 新增：`tests/evals/`
 - 允许新增：`tests/fixtures/`（若评测 fixture 需要与单元测试共享）
 - 允许修改：`tests/test_travelmind_regression.py`（只补充稳定契约）
-- 更新：`task_plan.md`、`progress.md`、`findings.md`
+- 更新：`docs/implementation-plan.md`、`docs/findings.md`
 - 不修改：`sync/`、`web/` 业务实现
 
-### 具体步骤
+### 具体步骤（已完成）
 
 - [completed] 0.1 盘点现有规划器可注入点，确定 Fake MCP、Fake LLM 和调用计数器的最小接口。
 - [completed] 0.2 建立 8-12 个固定场景，覆盖周末短途、多人预算、雨天、低预算、慢节奏、返程、自由文本硬约束和工具降级。
 - [completed] 0.3 为场景准备稳定的 POI、酒店、路线、天气和模型输出 fixture，禁止测试依赖网络、Key 或当前日期。
 - [completed] 0.4 实现评测 runner，记录场景输入、规划输出摘要、失败原因、调用次数和耗时。
 - [completed] 0.5 实现第一版指标：真实地点绑定率、重复地点率、硬约束满足率、路线超容忍率、预算偏差、返程住宿串台率、fallback 率。
-- [completed] 0.6 为指标设置“当前基线记录”，不把未经业务讨论的阈值当作最终质量门。
+- [completed] 0.6 为指标设置"当前基线记录"，不把未经业务讨论的阈值当作最终质量门。
 - [completed] 0.7 运行评测和现有全量回归，确认新增工具不会改变现有业务结果。
 
 ### 验收标准
@@ -109,7 +108,7 @@
 
 删除或回滚 `tests/evals/` 和本阶段新增的测试辅助文件即可；不应需要回滚 `sync/` 或 `web/`。
 
-### Phase 0 实际结果
+### 实际结果
 
 - 场景：10 个固定离线场景；Fake MCP/Fake DeepSeek 总调用 141 次，工具 fixture 故障场景记录 4 次失败。
 - 平均真实地点绑定率：0.5940。
@@ -141,7 +140,7 @@
 - `web/styles.css`（只补充新增输入控件的现有样式）
 - `tests/` 中请求契约、归一化和前端静态契约测试
 
-### 具体步骤
+### 具体步骤（已完成）
 
 - [x] 1.1 扩展 `PlanRequest`，增加 `freeText`、`hardConstraints`、`softPreferences` 或等价字段，并保留旧字段默认值。
 - [x] 1.2 在 `buildPlanPayload` 和 `buildTripPrompt` 中传递自由文本与硬约束，避免只存在于浏览器状态。
@@ -155,7 +154,7 @@
 - 用户输入的硬约束能在响应中找到对应的解析结果和证据。
 - 硬约束失败会进入质量评审并明确标记，不被普通推荐理由掩盖。
 - 旧版请求不带新增字段时行为和响应字段保持兼容。
-- Phase 0 中“自由文本硬约束”场景的传递率达到 100%。
+- Phase 0 中"自由文本硬约束"场景的传递率达到 100%。
 
 ### 暂停条件
 
@@ -166,20 +165,20 @@
 
 按字段粒度回退请求扩展和前端传参；保留 Phase 0 评测代码。
 
-### Phase 1 实际结果
+### 实际结果
 
 - `PlanRequest`、前端 `buildPlanPayload` 和 `buildTripPrompt` 已支持 `freeText`、`hardConstraints`、`softPreferences`，旧字段仍使用默认值。
 - `_normalize_preferences` 保留原始文本，并生成带 `id`、`kind`、`source`、`text` 的 `constraintSummary`，区分 `hard`、`soft` 和 `unknown`。
 - 规划脑 payload、规则规划路径和 `quality_review` 共用同一份约束摘要；逐项评审输出 `satisfied`、`violated`、`unknown` 与 `evidence`。
-- 前端新增“补充要求”输入和约束检查展示；旧 `/api/multi-agent-chat` 入口未改动。
+- 前端新增"补充要求"输入和约束检查展示；旧 `/api/multi-agent-chat` 入口未改动。
 - 新增 `tests/test_phase1_constraints.py`，覆盖请求兼容、归一化、规划输入、规则评审和前端静态契约。
 - Phase 1 离线评测：10 个场景；硬约束满足率 `0.7500`；自由文本硬约束场景传递和行为检查均为 `1.0000`。
 - Phase 1 仍未解决候选统一排序、预算超支反馈和全局路线门槛，这些保持在 Phase 2-3。
 - 验证结果：Phase 1 专项 5/5、Phase 0 评测 3/3、业务回归 22/22；合计 30/30；Python 编译、Node 语法和 `git diff --check` 通过。
 
-### Phase 1 暂停说明
+### 暂停说明
 
-Phase 1 已完成验收，当前停在 Phase 2 开始前。进入 Phase 2 前应先确认候选 Contract 的字段边界和兼容策略；本次不提前新增排序器或改动 MCP 返回协议。
+Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段边界和兼容策略；不提前新增排序器或改动 MCP 返回协议。
 
 ---
 
@@ -223,7 +222,7 @@ Phase 1 已完成验收，当前停在 Phase 2 开始前。进入 Phase 2 前应
 
 保留旧工具返回路径，通过 feature flag 或兼容解析器切回；候选排序可单独关闭，回到原候选顺序。
 
-### Phase 2 当前小步结果
+### 当前小步结果
 
 - 已新增 `sync/multi_agent/contracts.py`、`fact_normalizer.py`、`candidate_ranker.py`，并以 `tests/test_phase2_contracts.py` 覆盖地点、酒店、路线、天气、来源、过滤和排序。
 - 规划器保留旧 `pois`/`hotels` 字段，新增可选 `candidate_contracts`；DeepSeek 候选输入优先使用有效坐标、真实地点、去重和排序结果。
@@ -263,7 +262,7 @@ Phase 1 已完成验收，当前停在 Phase 2 开始前。进入 Phase 2 前应
 - 预算超支场景能产生真实替换或降级，而不是只给文字建议。
 - 反馈轮次有硬上限，调用次数可测，失败时保留最佳已知方案。
 - 任何硬约束违规都能阻止方案直接通过质量门。
-- 调整记录能解释“改了什么、为什么改、代价是什么”。
+- 调整记录能解释"改了什么、为什么改、代价是什么"。
 
 ### 暂停条件
 
@@ -301,7 +300,7 @@ Phase 1 已完成验收，当前停在 Phase 2 开始前。进入 Phase 2 前应
 
 ### 验收标准
 
-- “把第二天改成室内、预算不变”能只影响相关日期和预算，不丢失其他天。
+- "把第二天改成室内、预算不变"能只影响相关日期和预算，不丢失其他天。
 - 失败的追问不会覆盖当前可用计划。
 - Diff 可定位到日期、活动、预算和约束变化。
 - 旧 `/api/multi-agent-chat` 仍可作为兼容入口。
@@ -356,9 +355,53 @@ Phase 1 已完成验收，当前停在 Phase 2 开始前。进入 Phase 2 前应
 
 关闭持久化/事件流 feature flag，回到同步请求和浏览器本地快照；保留数据迁移脚本。
 
-## 6. 每阶段统一验证命令
+---
 
-在项目根目录执行：
+## 当前任务看板
+
+### 阶段状态
+
+- [completed] 基线勘察与 GitHub 同类项目对比
+- [completed] Phase 0：离线评测基线和护栏
+- [completed] Phase 1：约束完整进入 `/api/plan`
+- [in_progress] Phase 2：事实 Contract、候选评分与选择
+- [pending] Phase 3：预算反馈循环与全局质量门
+- [pending] Phase 4：结构化追问、计划版本与 Diff
+- [pending] Phase 5：持久化、真实进度与产品化质量门
+
+### Phase 2 当前步骤
+
+- [completed] 盘点现有 MCP 文本返回、规划器正则解析和离线 fixture 字段
+- [completed] 定义 `PlaceCandidate`、`HotelCandidate`、`RouteFact`、`WeatherFact` 和来源元数据 Contract
+- [completed] 为 Contract 增加事实归一化、硬过滤和可解释排序纯函数测试
+- [completed] 接入规划器，同时保留旧文本字段和兼容解析器
+- [in_progress] 覆盖高德成功、限流/Key 缺失、本地 fallback 和混合来源，并比较 Phase 2 指标
+- [pending] 运行全量评测并判断是否进入 Phase 3
+
+### Phase 2 当前指标对比
+
+| 指标 | Phase 0 | Phase 1 | Phase 2 | 变化 |
+|---|---:|---:|---:|---|
+| 真实地点绑定率 | 0.5940 | 0.5940 | 0.5940 | 不变 |
+| 重复地点率 | 0.0000 | 0.0000 | 0.0000 | 不变 |
+| 硬约束满足率 | 0.6000 | 0.7500 | 0.7500 | Phase 1 提升 |
+| 路线超容忍率 | 0.0750 | 0.0750 | 0.0500 | Phase 2 下降 |
+| 预算偏差 | 0.6217 | 0.6217 | 0.6191 | Phase 2 略降 |
+| 返程住宿串台率 | 0.0000 | 0.0000 | 0.0000 | 不变 |
+| fallback 率 | 0.0833 | 0.0833 | 0.1000 | Phase 2 上升，需分析 |
+
+紧换乘场景候选排序会把可用真实地点送入规划脑，但远距离 fixture 仍触发规则路线切换；这验证了候选排序不能替代 Phase 3 的全局路线质量门。当前需继续验证混合来源和严格坐标过滤的 fallback 行为；在此证据完成前，不切换 MCP 供应商返回协议，也不放宽真实地点/坐标护栏。
+
+### 工作边界
+
+- 当前阶段文件范围限定为 `sync/multi_agent/contracts.py`、`sync/multi_agent/fact_normalizer.py`、`sync/multi_agent/candidate_ranker.py`、必要的 `structured_planner.py` 和 `tests/`；供应商协议先不改。
+- `async/`、旧单 Agent 示例、v2 静态资源和供应商接入保持排除。
+- `.env` 内容保持私密；核心测试走离线 fixture，真实服务只作为手动验证路径。
+- 维持现有响应契约；后续新增字段必须可选并保留旧入口。
+
+## 统一验证命令
+
+在项目根目录（`my-langgraph-agent-main/`）执行：
 
 ```powershell
 # Python 语法
@@ -370,27 +413,36 @@ Get-ChildItem sync,async,tests -Recurse -Filter *.py | ForEach-Object {
 node --check web\app.js
 
 # 全量回归
-\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+# 离线评测
+.\.venv\Scripts\python.exe -m unittest discover -s tests\evals -v
 
 # 补丁空白检查
 git diff --check
 ```
 
-Phase 0 起额外执行：
-
-```powershell
-\.venv\Scripts\python.exe -m unittest discover -s tests\evals -v
-```
-
 若后续引入 Playwright，再增加项目已有的浏览器检查命令，并记录桌面/移动端截图和控制台错误。
 
-## 7. 回滚总原则
+## 错误记录
+
+| 错误 | 尝试 | 处理 |
+|---|---:|---|
+| `rg.exe` 启动时被 Windows 拒绝访问 | 1 | 改用 PowerShell 原生文件枚举，继续勘察 |
+| 首次合并计划补丁时 `task_plan.md` 原文匹配失败 | 1 | 拆分为独立新增计划文件和独立重建看板，继续执行 |
+| 第一次同步 `task_plan.md` 的补丁包含不存在的尾部上下文 | 1 | 缩小补丁匹配范围后成功更新，不影响文件内容 |
+| 路线 Contract 测试未识别无"距离"前缀的 `3.2 km` | 1 | 对照现有 fixture 和旧解析器后，将距离前缀改为可选，并补回归测试 |
+| Phase 2 场景诊断输出遇到 Windows GBK 无法编码 `¥` | 1 | 设置 `PYTHONIOENCODING=utf-8` 重复诊断，业务结果未受影响 |
+| Phase 2 报告初版被渲染为 Phase 0 标题 | 1 | 扩展评测 renderer 的 suite 识别并重新生成独立 Phase 2 报告 |
+
+## 回滚总原则
 
 - 每个 Phase 尽量保持单一职责提交，阶段之间不混合视觉重构和后端协议重构。
 - 新字段可选、旧字段保留；新流程通过配置或明确入口接入。
 - 发生回归时优先关闭本阶段 feature flag 或恢复适配器兼容路径，不回退用户已有的文档和评测资产。
 - 不使用破坏性 Git 命令覆盖用户未提交的工作。
 
-## 8. 当前暂停点
+## 当前暂停点与下一轮计划
 
-Phase 2 已启动，候选 Contract、事实归一化和可解释排序基础已通过离线测试并接入 `structured_planner.py`。当前继续补混合来源/严格过滤降级测试；预算反馈、结构化追问、持久化和真实任务事件不进入本阶段。
+已建立认知基线并完成朋友 `Ay` 分支的深度评估。`origin/Ay` 分支已率先完成 Phase A-E 架构重构与约束链路集成，且 44 个单元与集成测试全部通过。建议下一步立即将本地工作区同步/合并至 `origin/Ay` 分支，再开展前端交互增强（展示 `source_meta` 来源置信度、`validation` 契约校验及 `selection` 候选排序得分与理由）。
+
