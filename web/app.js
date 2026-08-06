@@ -18,7 +18,9 @@ const markdownResult = document.querySelector("#markdownResult");
 const tabButtons = document.querySelectorAll("[data-tab]");
 const appShell = document.querySelector(".app-shell");
 const resultNavPanel = document.querySelector("#resultNavPanel");
+const navCollapseButton = document.querySelector("#navCollapseButton");
 const inputPanels = document.querySelector("#inputPanels");
+const selectionSummary = document.querySelector("#selectionSummary");
 const backHomeButton = document.querySelector("#backHomeButton");
 const editPlanButton = document.querySelector("#editPlanButton");
 const exportDropdown = document.querySelector(".export-dropdown");
@@ -40,6 +42,7 @@ const planningStages = [
 
 const timeSlots = ["上午", "中午", "下午", "晚上", "夜间"];
 const sessionStorageKey = "travelmind:currentSession:v1";
+const navCollapsedStorageKey = "travelmind:navCollapsed:v1";
 const learnedHintsStorageKey = "travelmind:learnedHints:v1";
 const sessionWindowNamePrefix = `${sessionStorageKey}:`;
 const anonymousOwner = "anonymous";
@@ -216,6 +219,31 @@ function getPersistentStorage() {
   }
 }
 
+function readNavCollapsed() {
+  const storage = getPersistentStorage();
+  return storage?.getItem(navCollapsedStorageKey) === "1";
+}
+
+function writeNavCollapsed(collapsed) {
+  const storage = getPersistentStorage();
+  if (!storage) return;
+  storage.setItem(navCollapsedStorageKey, collapsed ? "1" : "0");
+}
+
+function setNavCollapsed(collapsed, options = {}) {
+  const nextState = Boolean(collapsed);
+  appShell.classList.toggle("nav-collapsed", nextState);
+  resultNavPanel.classList.toggle("nav-collapsed", nextState);
+  if (navCollapseButton) {
+    navCollapseButton.setAttribute("aria-expanded", String(!nextState));
+    navCollapseButton.setAttribute("aria-label", nextState ? "展开行程目录" : "收起行程目录");
+    navCollapseButton.title = nextState ? "展开行程目录" : "收起行程目录";
+    const icon = navCollapseButton.querySelector("span");
+    if (icon) icon.textContent = nextState ? "›" : "‹";
+  }
+  if (options.persist !== false) writeNavCollapsed(nextState);
+}
+
 function readLearnedHints() {
   const storage = getPersistentStorage();
   if (!storage) return [];
@@ -383,6 +411,8 @@ function restoreFollowupMessages(messages) {
 function setPlannedMode(enabled) {
   appShell.classList.toggle("has-plan", enabled);
   resultNavPanel.hidden = !enabled;
+  setNavCollapsed(enabled ? readNavCollapsed() : false, { persist: false });
+  if (inputPanels) inputPanels.hidden = enabled;
   if (backHomeButton) backHomeButton.hidden = !enabled;
   if (editPlanButton) editPlanButton.hidden = !enabled;
   if (exportDropdown) exportDropdown.hidden = !enabled;
@@ -391,6 +421,7 @@ function setPlannedMode(enabled) {
     budgetAdjusted = false;
     appShell.classList.remove("show-inputs");
     if (modifyPanel) modifyPanel.open = false;
+    if (inputPanels) inputPanels.hidden = false;
     if (editPlanButton) editPlanButton.textContent = "编辑行程";
     if (exportMenu) exportMenu.hidden = true;
   }
@@ -515,6 +546,29 @@ function buildPlanPayload() {
   };
 }
 
+function updateSelectionSummary() {
+  if (!selectionSummary) return;
+  const origin = document.querySelector("#originCity")?.value?.trim() || "出发地";
+  const destination = document.querySelector("#destinationCity")?.value?.trim() || "目的地";
+  const days = document.querySelector("#days")?.value || "2";
+  const travelers = document.querySelector("#travelers")?.value || "1";
+  const budget = document.querySelector("#budget")?.value;
+  const pace = document.querySelector('input[name="pace"]:checked')?.value || "标准节奏";
+  const hotelLevel = document.querySelector('input[name="hotelLevel"]:checked')?.value || "舒适住宿";
+  const interests = getCheckedValues("interests").slice(0, 2);
+  const chips = [
+    `${origin} → ${destination}`,
+    `${days} 天 · ${travelers} 人`,
+    budget ? `预算 ¥${Number(budget).toLocaleString("zh-CN")}` : "预算待定",
+    `${hotelLevel} · ${pace}`,
+    ...(interests.length ? [interests.join(" / ")] : []),
+  ];
+  const chipRoot = selectionSummary.querySelector(".selection-chips");
+  if (chipRoot) {
+    chipRoot.innerHTML = chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("");
+  }
+}
+
 function renderProgressSteps(activeIndex = 0, failed = false) {
   progressSteps.innerHTML = planningStages
     .map((stage, index) => {
@@ -594,9 +648,16 @@ function renderEmptyResult() {
   planResult.hidden = false;
   markdownResult.hidden = true;
   planResult.innerHTML = `
-    <div class="empty-result">
-      <strong>准备生成结构化行程</strong>
-      <p>填写左侧表单后，TravelMind 会在这里展示路线、酒店、天气、每日活动和预算。完整文本版会放到“方案原文”标签里。</p>
+    <div class="empty-result empty-result--hero">
+      <div class="empty-orbit" aria-hidden="true"><span>TM</span></div>
+      <div class="empty-kicker">TRAVEL WORKSPACE · READY</div>
+      <strong>把下一段旅程，变成一张清晰的行动地图</strong>
+      <p>填写出发地、目的地和偏好，TravelMind 会把路线、酒店、天气、景点与预算组织成可执行的旅行桌面。</p>
+      <div class="empty-feature-grid" aria-label="规划能力">
+        <span><b>01</b>多路线对比</span>
+        <span><b>02</b>每日节奏编排</span>
+        <span><b>03</b>天气与预算联动</span>
+      </div>
     </div>
   `;
   markdownResult.innerHTML = `<div class="empty-result"><strong>暂无方案原文</strong><p>生成行程后，这里会显示 Markdown 版本，便于复制或归档。</p></div>`;
@@ -650,16 +711,17 @@ function renderNamedItems(items, limit = 6, options = {}) {
   return items
     .slice(0, limit)
     .map((item) => {
+      const compactHotel = options.kind === "hotel" && options.compact;
       const note =
-        options.kind === "hotel"
+        options.kind === "hotel" && !compactHotel
           ? [hotelMatchReason(item, options), item.cost_note].filter(Boolean).join(" ")
           : item.cost_note;
       return `
-        <div class="mini-item">
+        <div class="mini-item${compactHotel ? " mini-item--hotel" : ""}">
           <strong>${escapeHtml(item.name || "未命名")}</strong>
-          <span>${escapeHtml(item.address || item.description || "暂无补充信息")}</span>
-          <small>${renderPoiMeta(item, options)}</small>
-          ${note ? `<em>${escapeHtml(note)}</em>` : ""}
+          <span>${escapeHtml(item.address || (compactHotel ? "地址待核实" : item.description || "暂无补充信息"))}</span>
+          <small>${compactHotel ? renderHotelMeta(item, options) : renderPoiMeta(item, options)}</small>
+          ${!compactHotel && note ? `<em>${escapeHtml(note)}</em>` : ""}
         </div>
       `;
     })
@@ -754,6 +816,24 @@ function renderPoiMeta(item = {}, options = {}) {
   if (item.price_confidence) meta.push(`可信度 ${priceConfidenceLabel(item.price_confidence)}`);
   if (item.type) meta.push(item.type);
   return escapeHtml(meta.join(" · ") || "高德 POI 参考");
+}
+
+function renderHotelMeta(item = {}, options = {}) {
+  const meta = [];
+  if (item.rating) meta.push(`评分 ${item.rating}`);
+  meta.push(hotelPriceSummary(item, options));
+  return escapeHtml(meta.filter(Boolean).join(" · ") || "价格待核实");
+}
+
+function hotelPriceSummary(item = {}, options = {}) {
+  const rangeText = formatPriceRange(item.price_range, { ...options, kind: "hotel" });
+  if (rangeText) return rangeText;
+  const cost = positiveAmount(item.cost) || positiveAmount(item.cost_estimate);
+  if (cost) return `约 ${formatMoney(cost)}/晚`;
+  if (["category_rule", "rule_fallback"].includes(item.cost_source)) {
+    return `约 ${formatMoney(hotelReferencePrice(options.hotelLevel))}/晚`;
+  }
+  return "价格待核实";
 }
 
 function priceConfidenceLabel(value) {
@@ -869,15 +949,16 @@ function normalizePlanData(data) {
   return data;
 }
 
-function renderTransportCards(intercity, prefs = {}) {
-  const options = intercity?.options || [];
-  if (!options.length) return `<div class="empty-state">暂无跨城交通候选</div>`;
-  return options
+function renderTransportCards(intercity, prefs = {}, renderOptions = {}) {
+  const routeOptions = intercity?.options || [];
+  if (!routeOptions.length) return `<div class="empty-state">暂无跨城交通候选</div>`;
+  const compact = Boolean(renderOptions.compact);
+  return routeOptions
     .map((option) => {
       const normalized = normalizeTransportOption({ ...option }, prefs);
       const selected = option.mode === intercity.recommended ? " selected" : "";
       return `
-        <article class="route-card${selected}">
+        <article class="route-card${selected}${compact ? " route-card--compact" : ""}">
           <div class="card-kicker">${selected ? "推荐主交通" : "备选方案"}</div>
           <h4>${escapeHtml(option.title || modeLabel(option.mode))}</h4>
           <div class="route-endpoints">
@@ -893,8 +974,10 @@ function renderTransportCards(intercity, prefs = {}) {
             <span>费用：${escapeHtml(normalized.price || "待校准")}</span>
             ${normalized.distance_km ? `<span>距离：约 ${escapeHtml(normalized.distance_km)} km</span>` : ""}
           </div>
-          <p>${escapeHtml(normalized.summary || "暂无路线摘要")}</p>
-          <span>${escapeHtml(normalized.warning || normalized.provider_status || "")}</span>
+          ${compact ? "" : `
+            <p>${escapeHtml(normalized.summary || "暂无路线摘要")}</p>
+            <span>${escapeHtml(normalized.warning || normalized.provider_status || "")}</span>
+          `}
         </article>
       `;
     })
@@ -910,6 +993,26 @@ function getBudgetRows(budget) {
     ["门票/体验", "tickets", breakdown.tickets],
     ["市内交通", "local_transport", breakdown.local_transport],
   ];
+}
+
+function budgetRowPercent(value, total) {
+  const amount = Number(value);
+  const totalAmount = Number(total);
+  if (!Number.isFinite(amount) || !Number.isFinite(totalAmount) || totalAmount <= 0 || amount <= 0) return 0;
+  return Math.round(Math.min(100, (amount / totalAmount) * 100));
+}
+
+function expectedSpendLabel(budget = {}) {
+  return budget?.total !== null && budget?.total !== undefined
+    ? `预计花费 ${formatMoney(budget.total)}`
+    : "预计花费待校准";
+}
+
+function budgetBreakdownSummary(budget = {}) {
+  const labels = getBudgetRows(budget)
+    .filter(([, , value]) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(([label]) => label);
+  return labels.length ? `费用构成：${labels.join("、")}` : "费用构成待补充";
 }
 
 function budgetStatusLabel(budget = {}) {
@@ -1029,26 +1132,31 @@ function renderBudget(budget, options = {}) {
   const sources = budget?.sources || {};
   const rows = getBudgetRows(budget);
   return `
-    <div class="budget-total">
-      <span>${options.compact ? "预算小结" : "预计总计"}</span>
-      <strong>${formatMoney(budget?.total)}</strong>
-    </div>
+    ${options.showTotal === false ? "" : `
+      <div class="budget-total">
+        <span>${options.compact ? "预算小结" : "预计总计"}</span>
+        <strong>${formatMoney(budget?.total)}</strong>
+      </div>
+    `}
     <div class="budget-rows ${options.compact ? "compact" : ""}">
       ${rows
         .map(
           ([label, key, value]) => `
-            <div>
-              <span>${escapeHtml(label)}</span>
-              <strong>${formatMoney(value)}</strong>
-              <em>${escapeHtml(sourceLabel(sources[key]))}</em>
+            <div class="budget-breakdown-row">
+              <div class="budget-row-head">
+                <span>${escapeHtml(label)}</span>
+                <strong>${formatMoney(value)}</strong>
+              </div>
+              <div class="budget-row-track" aria-hidden="true"><span style="width: ${budgetRowPercent(value, budget?.total)}%"></span></div>
+              ${options.showSources === false ? "" : `<em>${escapeHtml(sourceLabel(sources[key]))}</em>`}
             </div>
           `,
         )
         .join("")}
     </div>
-    <p>${escapeHtml(budget?.advice || "预算待校准")}</p>
+    ${options.showAdvice === false ? "" : `<p class="budget-advice">${escapeHtml(budget?.advice || "预算待校准")}</p>`}
     ${budgetAdjusted ? `<div class="status-line">已按手动调整重新估算活动项。</div>` : ""}
-    ${options.compact ? "" : `
+    ${options.compact || options.showBasis === false ? "" : `
       <div class="basis-list">
         ${(budget?.basis || [])
           .map((item) => `<span>${escapeHtml(item)}</span>`)
@@ -1099,7 +1207,6 @@ function renderWeather(weather, advice = {}) {
     ["防晒", advice.sun_protection],
     ["穿衣", advice.clothing],
     ["雨具", advice.umbrella],
-    ["行程", advice.schedule_note],
   ]
     .filter(([, text]) => text)
     .map(
@@ -1118,6 +1225,17 @@ function renderMap(mapData) {
   const markers = mapData?.markers || [];
   const fallbackPoints = mapData?.fallback_points || [];
   const staticLimit = mapData?.static_marker_limit || 10;
+  const pointTone = (category = "") =>
+    ({
+      activity: "activity",
+      attraction: "activity",
+      food: "food",
+      dining: "food",
+      hotel: "hotel",
+      lodging: "hotel",
+      transfer: "transport",
+      transport: "transport",
+    }[String(category).toLowerCase()] || "activity");
   const sourceLabels = {
     amap_poi: "高德 POI",
     hotel_poi: "酒店 POI",
@@ -1131,18 +1249,20 @@ function renderMap(mapData) {
     ? markers.map((marker) => ({
         label: marker.label,
         title: marker.title,
+        tone: pointTone(marker.category || marker.place_source),
         meta: `第 ${marker.day || "-"} 天 · ${marker.time || ""} · ${sourceLabels[marker.location_source] || "位置参考"}`,
       }))
     : fallbackPoints.map((title, index) => ({
         label: String(index + 1),
         title,
+        tone: "activity",
         meta: "暂无坐标，按候选点展示",
       }));
   const markerRows = pointRows
     .map(
       (point) => `
-        <div class="map-point">
-          <span>${escapeHtml(point.label)}</span>
+        <div class="map-point map-point--${point.tone}">
+          <span aria-hidden="true">${escapeHtml(point.label)}</span>
           <strong>${escapeHtml(point.title)}</strong>
           <em>${escapeHtml(point.meta)}</em>
         </div>
@@ -1150,10 +1270,9 @@ function renderMap(mapData) {
     )
     .join("");
   const previewRows = pointRows
-    .slice(0, 5)
     .map(
       (point) => `
-        <span class="map-chip">
+        <span class="map-chip map-chip--${point.tone}" title="${escapeHtml(point.meta)}">
           <b>${escapeHtml(point.label)}</b>${escapeHtml(point.title)}
         </span>
       `,
@@ -1402,6 +1521,50 @@ function weatherSummary(weather = {}) {
   return `${city} · ${String(text || "").slice(0, 24)}`;
 }
 
+function renderWeatherSignal(weather = {}, advice = {}) {
+  const entries = Object.entries(weather || {});
+  const [city, text] = entries[0] || ["目的地", "天气待查询"];
+  const adviceItems = [
+    ["穿衣", advice.clothing],
+    ["雨具", advice.umbrella],
+    ["防晒", advice.sun_protection],
+  ]
+    .filter(([, value]) => value)
+    .slice(0, 3);
+  return `
+    <div class="weather-signal-value" title="${escapeHtml(String(text || "天气待查询"))}">${escapeHtml(String(text || "天气待查询"))}</div>
+    <div class="weather-signal-city">${escapeHtml(city)} · 行程期间天气参考</div>
+    <div class="signal-tags">
+      ${adviceItems.length ? adviceItems.map(([label, value]) => `<span title="${escapeHtml(value)}">${escapeHtml(label)}</span>`).join("") : `<span>建议出发前复核</span>`}
+    </div>
+    <details class="inline-details weather-details" open>
+      <summary>查看详细天气与穿衣</summary>
+      <div class="weather-detail-list">${renderWeather(weather, advice)}</div>
+    </details>
+    <p class="card-footnote">天气为行程参考，出发前请再次确认。</p>
+  `;
+}
+
+function renderFeaturedHotel(hotels = {}, hotelArea = "") {
+  const featured = Array.isArray(hotels.candidates) ? hotels.candidates[0] : null;
+  if (!featured) {
+    return `
+      <div class="hotel-featured">
+        <strong>按片区筛选合适酒店</strong>
+        <span>${escapeHtml(hotelArea || "暂无酒店候选")}</span>
+      </div>
+    `;
+  }
+  const title = featured.name || featured.title || "酒店候选";
+  return `
+    <div class="hotel-featured">
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(featured.address || hotelArea || "高德酒店 POI 参考")}</span>
+      <small>${renderHotelMeta(featured, { kind: "hotel", compact: true })}</small>
+    </div>
+  `;
+}
+
 function renderPlanResult(data, options = {}) {
   const prefs = data.preferences || {};
   const hotels = data.hotels || {};
@@ -1409,16 +1572,12 @@ function renderPlanResult(data, options = {}) {
   const recommendedMode = modeLabel(data.intercity_transport?.recommended || "");
   const planningMode = planningModeLabel(data);
   const hotelArea = hotelAreaRecommendation(hotels, prefs);
-  const activitySpotlights = renderSpotlightCards(pois.attractions, "activity", 2);
-  const foodSpotlights = renderSpotlightCards(pois.foods, "food", 2);
+  const activitySpotlights = renderSpotlightCards(pois.attractions, "activity", 4);
+  const foodSpotlights = renderSpotlightCards(pois.foods, "food", 4);
+  const qualityScore = data.quality_review?.overall_score ?? "-";
+  const routeSource = qualitySourceLabel(data.quality_review?.source);
   const routeSupport = `
     ${renderQualityReview(data.quality_review)}
-    <div class="route-grid">${renderTransportCards(data.intercity_transport, prefs)}</div>
-  `;
-  const hotelSupport = `
-    <p>${escapeHtml(hotelArea)}</p>
-    <div class="status-line">${escapeHtml(hotels.provider_status || "not_configured")} · 高德 POI 参考，不代表实时房态</div>
-    <div class="mini-list">${renderNamedItems(hotels.candidates, 4, { kind: "hotel", hotelLevel: prefs.hotelLevel })}</div>
   `;
   const poiSupport = `
     <div class="spotlight-grid">
@@ -1444,64 +1603,105 @@ function renderPlanResult(data, options = {}) {
   planResult.innerHTML = `
     <div class="workbench-page travel-board">
       <section id="overviewSection" class="overview-hero">
-        <div>
-          <span>规划完成</span>
+        <div class="hero-main">
+          <div class="hero-kicker"><span class="hero-status-dot"></span>规划完成 · ${escapeHtml(planningMode)}</div>
           <h3>${escapeHtml(prefs.destinationCity || "")}旅行计划</h3>
-          <p>${escapeHtml(planningMode)}</p>
-          <p>${escapeHtml(prefs.startDate || "")} 出发 · ${escapeHtml(prefs.days || "-")} 天 · ${escapeHtml(prefs.travelers || "-")} 人 · ${escapeHtml(recommendedMode || "主交通待定")}</p>
-          <p>${escapeHtml(hotelArea)}</p>
+          <p class="hero-description">路线、地点、天气与预算已经整理好，接下来只需要按你的节奏出发。</p>
+          <div class="hero-meta">
+            <span>${escapeHtml(prefs.startDate || "日期待定")} 出发</span>
+            <span>${escapeHtml(prefs.days || "-")} 天 · ${escapeHtml(prefs.travelers || "-")} 人</span>
+            <span>${escapeHtml(recommendedMode || "主交通待定")}</span>
+          </div>
         </div>
-        <div class="hero-tags">
-          <strong>${escapeHtml(prefs.originCity || "")} → ${escapeHtml(prefs.destinationCity || "")}</strong>
-          <strong>${escapeHtml(prefs.hotelLevel || "舒适")}档住宿</strong>
-          <strong>${escapeHtml((prefs.interests || []).join("、") || "经典景点")}</strong>
-          <strong>${escapeHtml(budgetStatusLabel(data.budget || {}))}</strong>
+        <div class="hero-side">
+          <div class="hero-route-label">本次路线</div>
+          <strong class="hero-route">${escapeHtml(prefs.originCity || "出发地")} <span>→</span> ${escapeHtml(prefs.destinationCity || "目的地")}</strong>
+          <div class="hero-tags">
+            <strong>${escapeHtml(prefs.hotelLevel || "舒适")}档住宿</strong>
+            <strong>${escapeHtml((prefs.interests || []).join("、") || "经典景点")}</strong>
+            <strong>${escapeHtml(budgetStatusLabel(data.budget || {}))}</strong>
+          </div>
         </div>
       </section>
 
-      <section id="daysSection" class="result-card day-section">
-        <div class="section-title">每日行程</div>
-        ${editMode ? `<div class="status-line">编辑模式：可上移、下移或删除活动；不会自动重新调用 Agent。</div>` : ""}
-        ${renderItineraryDays(data.itinerary_days)}
+      <section id="routeOptionsSection" class="route-options-panel" aria-labelledby="routeComparisonTitle">
+        <div class="route-options-head">
+          <div>
+            <span class="route-options-kicker">ROUTE OPTIONS</span>
+            <strong id="routeComparisonTitle">路线对比</strong>
+          </div>
+          <small>选择本次行程的主交通方式</small>
+        </div>
+        <div class="route-grid route-grid--hero">${renderTransportCards(data.intercity_transport, prefs, { compact: true })}</div>
       </section>
 
-      <aside class="support-dock" aria-label="地图与支持信息">
-        <section id="poiSection" class="result-card recommendation-card">
-          <div class="section-title">精选推荐</div>
-          ${poiSupport}
+      <section class="signal-grid" aria-label="旅行摘要">
+        <article id="hotelSection" class="signal-card signal-card--stay">
+          <div class="signal-card-head"><span class="signal-eyebrow">住宿策略</span><span class="signal-icon" aria-hidden="true">⌂</span></div>
+          <strong class="signal-card-title">${escapeHtml(hotelArea || "按片区筛选酒店")}</strong>
+          ${renderFeaturedHotel(hotels, hotelArea)}
+          <details class="inline-details">
+            <summary>查看匹配候选</summary>
+            <div class="mini-list">${renderNamedItems(hotels.candidates, 4, { kind: "hotel", hotelLevel: prefs.hotelLevel, compact: true })}</div>
+          </details>
+          <p class="card-footnote">酒店位置为高德 POI 参考；价格为参考区间，实际房价和房态以酒店平台实时信息为准。</p>
+        </article>
+
+        <article id="budgetSection" class="signal-card signal-card--budget">
+          <div class="signal-card-head"><span class="signal-eyebrow">预算大盘</span><span class="signal-icon" aria-hidden="true">¥</span></div>
+          <div class="signal-money">${formatMoney(data.budget?.total)}</div>
+          <div class="signal-status">${escapeHtml(expectedSpendLabel(data.budget || {}))}</div>
+          <div class="budget-spark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+          <details class="inline-details budget-details">
+            <summary>查看费用构成</summary>
+            <div class="budget-breakdown">${renderBudget(data.budget || {}, { compact: true, showTotal: false, showAdvice: false, showSources: false })}</div>
+          </details>
+          <p class="signal-note">${escapeHtml(budgetBreakdownSummary(data.budget || {}))}</p>
+          <p class="card-footnote">预计金额会随购票、订房和现场消费变化。</p>
+        </article>
+
+        <article id="weatherSection" class="signal-card signal-card--weather">
+          <div class="signal-card-head"><span class="signal-eyebrow">天气与穿衣</span><span class="signal-icon" aria-hidden="true">☼</span></div>
+          ${renderWeatherSignal(data.weather, data.weather_advice)}
+        </article>
+
+        <article class="signal-card signal-card--route">
+          <div class="signal-card-head"><span class="signal-eyebrow">路线体检</span><span class="signal-icon" aria-hidden="true">↗</span></div>
+          <div class="route-score-line"><strong>${escapeHtml(qualityScore)}</strong><span>/ 100</span><small>${escapeHtml(routeSource)}</small></div>
+          <p class="signal-card-title">${escapeHtml(qualityReviewSummary(data.quality_review))}</p>
+          <div class="signal-tags"><span>推荐：${escapeHtml(recommendedMode || "主交通待定")}</span><span>低摩擦衔接</span></div>
+          <details class="inline-details route-health-details">
+            <summary>查看路线体检详情</summary>
+            <div class="route-health-details-body">${routeSupport}</div>
+          </details>
+        </article>
+      </section>
+
+      <section id="mapSection" class="result-card map-card map-card--wide">
+        <div class="section-heading-row compact-heading"><div><div class="section-kicker">MAP VIEW</div><div class="section-title">地图视图</div></div><span class="section-caption">按行程顺序</span></div>
+        ${renderMap(data.map || {})}
+      </section>
+
+      <div class="content-grid">
+        <section id="daysSection" class="result-card day-section">
+          <div class="section-heading-row">
+            <div>
+              <div class="section-kicker">DAY BY DAY</div>
+              <div class="section-title">每日行程</div>
+            </div>
+            <span class="section-caption">按地点顺序安排移动与停留</span>
+          </div>
+          ${editMode ? `<div class="status-line">编辑模式：可上移、下移或删除活动；不会自动重新调用 Agent。</div>` : ""}
+          ${renderItineraryDays(data.itinerary_days)}
         </section>
-        <section id="mapSection" class="result-card map-card">
-          <div class="section-title">地图视图</div>
-          ${renderMap(data.map || {})}
-        </section>
-        ${renderSupportPanel({
-          className: "overview-card",
-          title: "路线体验",
-          summary: `${recommendedMode || "主交通待定"} · ${qualityReviewSummary(data.quality_review)}`,
-          body: routeSupport,
-        })}
-        ${renderSupportPanel({
-          id: "hotelSection",
-          className: "hotel-section",
-          title: "住宿匹配",
-          summary: hotelArea,
-          body: hotelSupport,
-        })}
-        ${renderSupportPanel({
-          id: "budgetSection",
-          className: "budget-section",
-          title: "预算评估",
-          summary: budgetStatusLabel(data.budget || {}),
-          body: renderBudget(data.budget || {}),
-        })}
-        ${renderSupportPanel({
-          id: "weatherSection",
-          className: "weather-section",
-          title: "天气建议",
-          summary: weatherSummary(data.weather),
-          body: renderWeather(data.weather, data.weather_advice),
-        })}
-      </aside>
+
+        <aside class="support-dock" aria-label="支持信息">
+          <section id="poiSection" class="result-card recommendation-card">
+            <div class="section-heading-row compact-heading"><div><div class="section-kicker">LOCAL PICKS</div><div class="section-title">精选推荐</div></div><span class="section-caption">景点与餐饮</span></div>
+            ${poiSupport}
+          </section>
+        </aside>
+      </section>
     </div>
   `;
   if (!options.preserveScroll) scrollWorkspaceToTop();
@@ -1523,15 +1723,10 @@ function renderCurrentPlanFromState(options = {}) {
   return true;
 }
 
-function showSessionNotice(message) {
-  const page = planResult.querySelector(".workbench-page");
-  if (!page) return;
-  page.insertAdjacentHTML("afterbegin", `<div class="status-line">${escapeHtml(message)}</div>`);
-}
-
 function renderSavedHomeState() {
   appShell.classList.remove("has-plan", "show-inputs");
   resultNavPanel.hidden = true;
+  if (inputPanels) inputPanels.hidden = false;
   if (backHomeButton) backHomeButton.hidden = true;
   if (editPlanButton) editPlanButton.hidden = true;
   if (exportDropdown) exportDropdown.hidden = true;
@@ -1567,7 +1762,6 @@ function restoreSessionSnapshot() {
   restoreFollowupMessages(snapshot.followupMessages);
   if (currentPlanData) {
     renderCurrentPlanFromState({ skipSave: true, preserveScroll: true });
-    showSessionNotice("已恢复上次行程，刷新或误点返回首页不会丢失当前记录。");
   } else {
     renderEmptyResult();
     setTrace(currentTrace, { skipSave: true });
@@ -2190,9 +2384,14 @@ followupInput.addEventListener("keydown", (event) => {
 document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => {
     followupInput.value = button.dataset.prompt;
+    const followupPanel = document.querySelector(".followup-panel");
+    if (followupPanel) followupPanel.open = true;
     followupInput.focus();
   });
 });
+
+tripForm.addEventListener("input", updateSelectionSummary);
+tripForm.addEventListener("change", updateSelectionSummary);
 
 resetButton.addEventListener("click", async () => {
   await fetch("/api/reset", { method: "POST" });
@@ -2278,14 +2477,24 @@ navLinks.forEach((button) => {
   });
 });
 
+if (navCollapseButton) {
+  navCollapseButton.addEventListener("click", () => {
+    setNavCollapsed(!appShell.classList.contains("nav-collapsed"));
+  });
+}
+
 if (modifyPanel) {
   modifyPanel.addEventListener("toggle", () => {
     appShell.classList.toggle("show-inputs", modifyPanel.open);
+    if (inputPanels && appShell.classList.contains("has-plan")) {
+      inputPanels.hidden = !modifyPanel.open;
+    }
   });
 }
 
 setupDefaultDate();
+updateSelectionSummary();
 if (!restoreSessionSnapshot()) {
   renderEmptyResult();
 }
-loadTools();
+if (toolList && !toolList.closest("[hidden]")) loadTools();

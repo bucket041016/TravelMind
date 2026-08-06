@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TravelMind</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/styles_v2.css?v=phase33" />
+    <link rel="stylesheet" href="/static/styles_v2.css?v=phase45" />
   </head>
   <body class="travelmind-v2">
     <div class="app-shell">
@@ -13,13 +13,19 @@
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">TM</div>
           <div>
+            <div class="brand-kicker">SMART TRAVEL DESK</div>
             <h1>TravelMind</h1>
             <p>Integrated vibe: itinerary, social picks, map</p>
           </div>
         </div>
 
         <section id="resultNavPanel" class="result-nav-panel glass-panel" hidden>
-          <div class="panel-title">行程目录</div>
+          <div class="result-nav-head">
+            <div class="panel-title">行程目录</div>
+            <button id="navCollapseButton" class="nav-collapse-button" type="button" aria-expanded="true" aria-controls="resultNavPanel" aria-label="收起行程目录" title="收起行程目录">
+              <span aria-hidden="true">‹</span>
+            </button>
+          </div>
           <div class="nav-stack">
             <button class="nav-link active" type="button" data-scroll-target="overviewSection">行程概览</button>
             <button class="nav-link" type="button" data-scroll-target="daysSection">每日行程</button>
@@ -37,7 +43,14 @@
 
         <div id="inputPanels" class="input-panels">
           <section class="planner-card glass-panel">
-            <div class="panel-title">Plan A Trip</div>
+            <div class="panel-heading">
+              <div>
+                <div class="panel-kicker">TRIP BUILDER · STEP 1</div>
+                <div class="panel-title">Plan A Trip</div>
+              </div>
+              <span class="planner-state">准备就绪</span>
+            </div>
+            <p class="planner-intro">告诉我你的出发地、目的地和旅行偏好，我会把路线、天气、酒店与预算整理成一张可执行的旅行桌面。</p>
             <form id="tripForm" class="trip-form">
               <div class="form-section">
                 <div class="form-section-title">基础行程</div>
@@ -153,6 +166,11 @@
                 </label>
               </details>
 
+              <div id="selectionSummary" class="selection-summary" aria-live="polite">
+                <span class="selection-label">当前方案</span>
+                <div class="selection-chips"></div>
+              </div>
+
               <button id="planButton" class="primary-button" type="submit">
                 <span>Plan My Trip</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -257,6 +275,6 @@
       </aside>
     </div>
 
-    <script src="/static/app.js?v=phase33"></script>
+    <script src="/static/app.js?v=phase48"></script>
   </body>
 </html>

@@ -257,10 +257,16 @@ def svg_map_placeholder(message: str) -> Response:
   </defs>
   <rect width="960" height="520" fill="url(#bg)"/>
   <path d="M90 120h780M90 210h780M90 300h780M90 390h780M210 70v380M390 70v380M570 70v380M750 70v380" stroke="#c9d8e6" stroke-width="2" opacity=".7"/>
-  <circle cx="350" cy="245" r="16" fill="#1479c9"/>
-  <circle cx="520" cy="305" r="16" fill="#24a36a"/>
-  <circle cx="655" cy="205" r="16" fill="#d88a17"/>
-  <path d="M350 245C410 230 455 330 520 305S605 210 655 205" fill="none" stroke="#1479c9" stroke-width="8" stroke-linecap="round" opacity=".55"/>
+  <path d="M350 245C410 230 455 330 520 305S605 210 655 205" fill="none" stroke="#5c8d96" stroke-width="7" stroke-linecap="round" opacity=".58"/>
+  <circle cx="350" cy="245" r="20" fill="#ffffff" opacity=".95"/>
+  <circle cx="350" cy="245" r="15" fill="#0b7285"/>
+  <text x="350" y="251" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">1</text>
+  <circle cx="520" cy="305" r="20" fill="#ffffff" opacity=".95"/>
+  <circle cx="520" cy="305" r="15" fill="#c47a13"/>
+  <text x="520" y="311" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">2</text>
+  <circle cx="655" cy="205" r="20" fill="#ffffff" opacity=".95"/>
+  <circle cx="655" cy="205" r="15" fill="#73539c"/>
+  <text x="655" y="211" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">3</text>
   <rect x="246" y="430" width="468" height="44" rx="10" fill="#ffffff" opacity=".92"/>
   <text x="480" y="458" text-anchor="middle" font-family="Microsoft YaHei, Arial, sans-serif" font-size="18" fill="#425466">{safe_message}</text>
 </svg>"""
@@ -372,11 +378,11 @@ def map_static(markers: str = "", path: str = "", title: str = ""):
 
     point_text = ";".join(f"{point['lng']:.6f},{point['lat']:.6f}" for point in points[:10])
     marker_styles = "|".join(
-        f"mid,0x1479C9,{amap_static_marker_label(point['label'], index)}:{point['lng']:.6f},{point['lat']:.6f}"
+        f"mid,0x0B7285,{amap_static_marker_label(point['label'], index)}:{point['lng']:.6f},{point['lat']:.6f}"
         for index, point in enumerate(points[:10])
     )
     label_styles = "|".join(
-        f"{point['label']},0,0,14,0xFFFFFF,0x1479C9:{point['lng']:.6f},{point['lat']:.6f}"
+        f"{point['label']},0,0,16,0xFFFFFF,0x0B7285:{point['lng']:.6f},{point['lat']:.6f}"
         for point in points[:10]
     )
     route_points = []
@@ -389,12 +395,12 @@ def map_static(markers: str = "", path: str = "", title: str = ""):
         "key": amap_key,
         "size": "960*520",
         "scale": "2",
-        "markers": marker_styles or f"mid,0x1479C9,1:{point_text}",
+        "markers": marker_styles or f"mid,0x0B7285,1:{point_text}",
     }
     if label_styles:
         params["labels"] = label_styles
     if route_text and len(route_points) > 1:
-        params["paths"] = f"8,0x1479C9,0.8,,:{route_text}"
+        params["paths"] = f"6,0x5C8D96,0.58,,:{route_text}"
 
     try:
         response = requests.get(

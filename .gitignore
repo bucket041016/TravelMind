@@ -44,8 +44,10 @@ secrets/
 *.pid
 *.pids.txt
 /logs/
+/output/
 /outputs/
 /tmp_screenshots/
+/.playwright-cli/
 /.playwright-mcp/
 
 # IDE and editor settings
