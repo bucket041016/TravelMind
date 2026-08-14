@@ -1537,7 +1537,7 @@ function renderWeatherSignal(weather = {}, advice = {}) {
     <div class="signal-tags">
       ${adviceItems.length ? adviceItems.map(([label, value]) => `<span title="${escapeHtml(value)}">${escapeHtml(label)}</span>`).join("") : `<span>建议出发前复核</span>`}
     </div>
-    <details class="inline-details weather-details" open>
+    <details class="inline-details weather-details">
       <summary>查看详细天气与穿衣</summary>
       <div class="weather-detail-list">${renderWeather(weather, advice)}</div>
     </details>
