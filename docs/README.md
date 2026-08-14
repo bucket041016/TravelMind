@@ -13,7 +13,7 @@
 | [project-baseline.md](project-baseline.md) | 架构、目录职责、API/MCP 契约、运行方式、验证结果 | 低频（架构或契约变更时） |
 | [product-overview.md](product-overview.md) | 产品对外介绍、亮点、MCP 工具表、启动演示 | 低频 |
 | [open-source-comparison.md](open-source-comparison.md) | GitHub 同类项目对比、差距矩阵 | 低频（新调研时） |
-| [implementation-plan.md](implementation-plan.md) | 阶段执行合同、任务看板、过程记录、当前状态 | 高频（每个 Phase/小步） |
+| [implementation-plan.md](implementation-plan.md) | 阶段执行合同、任务看板、工程债务台账、过程记录、当前状态 | 高频（每个 Phase/小步/债务项） |
 | [findings.md](findings.md) | 勘察发现、各阶段发现、验证证据、续接摘要与下一步入口 | 中频（按需补充） |
 
 ## 维护约定

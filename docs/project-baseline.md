@@ -46,7 +46,7 @@ flowchart LR
 3. 跨城交通：高铁/城际、自驾，按距离策略补充飞机候选。
 4. 景点、美食、特色店铺和酒店 POI。
 5. POI/酒店片区聚类与住宿匹配理由。
-6. 旧文本事实归一化、真实地点/坐标/重复/排除项过滤和可解释候选排序；结果以可选 `candidate_contracts` 输出。
+6. 旧文本事实归一化、真实地点/坐标/重复/排除项过滤和可解释候选排序；`candidate_contracts` 的构建与消费代码已就绪，但 `run()` 尚未接线产出（工程债务 D2）。
 7. 目的地内推荐模式和相邻真实地点之间的路线段。
 8. DeepSeek 结构化行程；服务不可用或输出不合规时采用规则行程。
 9. 行程质量体检：路线、节奏、片区、返程和预算；需要时最多返工一次。
@@ -103,11 +103,11 @@ flowchart LR
 }
 ```
 
-主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`map`、`budget`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 新增可选 `candidate_contracts`，旧 `pois`/`hotels` 字段继续保留。
+主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`map`、`budget`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 计划新增可选 `candidate_contracts`（构建/消费端已就绪，`run()` 尚未接线，见工程债务 D2），旧 `pois`/`hotels` 字段继续保留。
 
 `constraintSummary` 按 `hard`、`soft`、`unknown` 分组；每项保留 `id`、`kind`、`text`、`source`。质量评审逐项给出 `satisfied`、`violated` 或 `unknown`，并附 `evidence`。
 
-`candidate_contracts` 当前版本为 `travelmind-candidate-v1`，来源模式为 `legacy_text_compatible`；包含 POI/酒店入选候选、评分理由、来源元数据和过滤落选原因。MCP Server 的供应商返回仍是旧文本。
+`candidate_contracts` 计划版本为 `travelmind-candidate-v1`，来源模式为 `legacy_text_compatible`；包含 POI/酒店入选候选、评分理由、来源元数据和过滤落选原因（当前尚未在 `run()` 接线产出）。MCP Server 的供应商返回仍是旧文本。
 
 每日 item 重点字段：`title`、`location`、`address`、`category`、`is_real_place`、`place_source`、`location_point`、`map_included`、`cost_estimate`、`cost_source`、`arrival_transport_segment`。
 

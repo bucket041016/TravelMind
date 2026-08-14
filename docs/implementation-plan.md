@@ -230,7 +230,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 ### 当前小步结果
 
 - 已新增 `sync/multi_agent/contracts.py`、`fact_normalizer.py`、`candidate_ranker.py`，并以 `tests/test_phase2_contracts.py` 覆盖地点、酒店、路线、天气、来源、过滤和排序。
-- 规划器保留旧 `pois`/`hotels` 字段，新增可选 `candidate_contracts`；DeepSeek 候选输入优先使用有效坐标、真实地点、去重和排序结果。
+- 规划器保留旧 `pois`/`hotels` 字段，DeepSeek 候选输入优先使用有效坐标、真实地点、去重和排序结果；`candidate_contracts` 的构建与消费代码已就绪，但 `run()` 尚未接线产出（见工程债务 D2）。
 - MCP Server 仍返回旧文本，当前通过兼容归一化层接入，没有修改供应商协议或 `MCPToolbox` 字符串边界。
 - Phase 2 专项/集成测试 `7/7`，全量回归 `38/38`，Python 编译、Node 检查和 `git diff --check` 通过。
 - 独立报告：`tests/evals/phase2_report.json`、`tests/evals/phase2_report.md`。与 Phase 1 相比，路线超容忍率由 `0.0750` 降至 `0.0500`，预算偏差由 `0.6217` 降至 `0.6191`，fallback 率由 `0.0833` 升至 `0.1000`。
@@ -427,6 +427,27 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 
 ---
 
+## 工程债务台账（与 Phase 并行，不占阶段名额）
+
+> 债务不阻塞主线 Phase，但部分债务是后续 Phase 的前置条件（已标注）。每项用 `D` 编号跟踪，状态同步在"当前任务看板"。
+
+| 编号 | 债务 | 问题与证据 | 处理方案 | 优先级 | 关联 | 状态 |
+|---|---|---|---|---|---|---|
+| D1 | MCPToolAdapter 每次调用新建连接 | `call_mcp_tool` 每次 `asyncio.run` + 新建 `Client`（2 次 HTTP 握手）；单次规划数十次调用；agentic 实验 6 调用 27.6s | 复用 Client 连接，或把 `/api/plan` 改异步端点统一事件循环 | 高 | Phase 2.5 前序条件 | 未开始（调试 print、空 content 防护已清理） |
+| D2 | `candidate_contracts` 生产未接线 | `_build_candidate_contracts` 已定义但 `run()` 未调用；消费端 `itinerary_builder` 已就绪；文档声称"新增可选字段"与实际不符（2026-08-14 核对） | 在 `run()` 接入输出可选字段并补断言测试，或修正文档声明 | 高 | Phase 2 收尾；D3 前提 | 未开始 |
+| D3 | 前端不展示来源/排序理由 | `source_meta`/`validation`/`selection` 后端已生成（D2 接线后才有产出），页面未展示 | 结果页展示来源置信度、入选/落选理由 | 中 | 依赖 D2 | 未开始 |
+| D4 | 死代码退役 | `async/` 4 文件、`sync/agent_chatbot_*.py`、`sync/user_api.py`、legacy `*_agent.py`+`orchestrator.py`（仅 `/api/multi-agent-chat` 可达、零测试） | 先给旧入口补冒烟测试再决定退役；保留 API 兼容或明确下线 | 中 | — | 未开始 |
+| D5 | 重复函数收敛 | haversine ×4（1 份无 clamp）、`_poi_key`×2、`_parse_price_range`×2（全角～处理不一致）、`_default_hotel_area`×3 | 收敛到 `contracts.py`/`text_parser.py` 单一实现 | 中 | — | 未开始 |
+| D6 | app.js 单文件约 2300 行 | 双页面历史遗留，维护困难 | 按渲染/请求/编辑/导出拆 ES modules | 中 | 建议 Phase 4 动前端前完成 | 未开始 |
+| D7 | 前端 fetch 无超时、错误透传 | 请求可能永久挂起；错误直接显示后端 detail | AbortController 超时 + 结构化错误提示 | 中 | — | 未开始 |
+| D8 | staticmethod 兼容层 | `structured_planner.py` 约 150 行桥接（Phase E 遗留） | 测试全部改纯函数调用后移除桥接 | 低 | — | 未开始 |
+| D9 | 仅测试使用的函数 | `normalize_route_fact`、`validate_place_candidate` 生产链路未使用 | 明确接入或移除，避免误导读者 | 低 | — | 未开始 |
+| D10 | 小项合集 | CORS `allow_origins=*`+`allow_credentials=True` 无效组合；`max_tokens=3500` 多日行程截断风险；`write_itinerary_file` 文件名边界；Windows 日志 GBK 编码 | 逐项顺手修 | 低 | — | 未开始 |
+
+建议穿插顺序：D1 → D2 → D3 与 Phase 2 收尾并行；D4/D5 作为低风险清理穿插；D6 在 Phase 4 之前完成；D7/D8/D9/D10 随时顺手。
+
+---
+
 ## 当前任务看板
 
 ### 阶段状态
@@ -439,6 +460,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [pending] Phase 3：预算反馈循环与全局质量门
 - [pending] Phase 4：结构化追问、计划版本与 Diff
 - [pending] Phase 5：持久化、真实进度与产品化质量门
+- [pending] 工程债务 D1-D10（见"工程债务台账"；D1/D2 为高优先级前置）
 
 ### Phase 2 当前步骤
 
