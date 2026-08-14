@@ -12,7 +12,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from langchain.tools.render import render_text_description
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -35,7 +35,7 @@ WEB_DIR = PROJECT_ROOT / "web"
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-MCP_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8083/my-custom-path")
+MCP_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8098/my-custom-path")
 
 
 @tool
@@ -337,7 +337,8 @@ def index():
 
 @app.get("/v2")
 def index_v2():
-    return FileResponse(WEB_DIR / "index_v2.html")
+    # 旧版入口已合并进首页，保留 /v2 重定向兼容旧书签。
+    return RedirectResponse(url="/", status_code=301)
 
 
 @app.get("/api/tools")
