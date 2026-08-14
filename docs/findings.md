@@ -1,7 +1,7 @@
 # TravelMind 勘察发现与阶段发现
 
 > 合并自根目录 `findings.md`（发现记录）与 `CONTINUATION_SUMMARY.md`（续接摘要），2026-08-04 去重整理；代码根目录为 `my-langgraph-agent-main/`。
-> 规则类约束见 [workspace-rules.md](workspace-rules.md)，阶段结果与看板见 [implementation-plan.md](implementation-plan.md)，本文件只保留发现性结论和续接入口。
+> 规则类约束见 `CONTRIBUTING.md` 与 `DEVLOG.md` 维护规则，阶段结果与看板见 [implementation-plan.md](implementation-plan.md)，本文件只保留发现性结论和续接入口。
 
 ## 初始范围
 
@@ -39,11 +39,11 @@
 
 ## 前端现状
 
-- `web/index.html` 是三栏工作台：结构化出行表单、结果主区、追问侧栏；静态资源版本为 `phase33`。
-- `web/app.js` 默认提交 `/api/plan`，规划阶段进度为 8 步；追问提交 `/api/multi-agent-chat`，并持久化当前计划、追问和轻量偏好到 `localStorage`。
+- `web/index.html` 是三栏工作台：结构化出行表单、结果主区、追问侧栏；静态资源通过版本参数管理缓存（两页统一为 `phase49`）。
+- `web/app.js` 默认提交 `/api/plan`，规划阶段进度为 8 步（当前为前端定时器模拟，真实任务事件待 Phase 5）；追问提交 `/api/multi-agent-chat`，并持久化当前计划、追问和轻量偏好到 `localStorage`。
 - 结果页以每日行程为主，支持路线/天气/酒店/预算/POI/地图等支持信息折叠查看；编辑模式支持每日 item 上移、下移、删除，并在前端重建市内路线和预算。
 - 生成结果后布局从约 `320/主区/340` 调整为更窄的侧栏；在 760px 以下转为纵向堆叠，表单和多数网格改为单列。
-- 当前 CSS 采用浅色、蓝青绿多色调、半透明面板和渐变背景；`index_v2.html`、`styles_v2.css` 是未接入当前入口的另一版静态资产。
+- 当前 CSS 采用浅色、蓝青绿多色调、半透明面板和渐变背景；v2 页面已替代 v1 成为唯一入口（`web/index.html` + `web/styles.css`），`/v2` 路由保留为重定向，且表单已包含"补充要求"（freeText）输入。
 
 ## 异步与遗留代码
 
@@ -138,5 +138,5 @@
 
 - GitHub 各仓库的逐目录原始调研细节；日常以 `docs/open-source-comparison.md` 的结论矩阵和已确认机制为准。
 - `tests/evals/baseline_report.json`、`phase1_report.json`、`phase2_report.json` 的完整逐场景明细；日常使用对应 Markdown 聚合报告，出现指标回归时再读取 JSON。
-- `async/`、早期单 Agent 示例、`web/index_v2.html`、`web/styles_v2.css`；它们是遗留或未接入当前入口的材料，除非当前 Phase 明确触及。
+- `async/` 和早期单 Agent 示例（`sync/agent_chatbot_*.py`、`sync/user_api.py`）；它们是遗留实验材料，除非当前 Phase 明确触及。
 - `docs/archive/` 下的历史文档（早期交接与产品化分析）；如与源码、现有测试或本摘要冲突，以源码和最近验证结果为准。

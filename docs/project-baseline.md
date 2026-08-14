@@ -60,15 +60,14 @@ flowchart LR
 | `sync/travel_web_app.py` | FastAPI 应用、三条 API、静态地图代理、单 Agent 初始化 | 当前 Web 入口 |
 | `sync/fastmcp_server_streamhttp.py` | FastMCP HTTP Server、高德调用、缓存限速、备用数据、文件输出 | 当前 MCP 入口 |
 | `sync/mcp_tools_adapter.py` | FastMCP Client 与 LangChain 工具包装 | 连接层 |
-| `sync/multi_agent/structured_planner.py` | 结构化规划主逻辑，约 3600 行函数级实现 | 当前核心业务模块 |
+| `sync/multi_agent/structured_planner.py` | 结构化规划编排器（约 660 行），业务逻辑已拆分到同目录 20 个模块 | 当前核心业务模块 |
 | `sync/multi_agent/contracts.py` | 地点、酒店、路线、天气和来源元数据 Contract | Phase 2 事实边界 |
 | `sync/multi_agent/fact_normalizer.py` | 将旧文本解析结果归一化为 JSON-safe 事实 | Phase 2 兼容层 |
 | `sync/multi_agent/candidate_ranker.py` | 候选硬过滤、评分、排序和入选/落选理由 | Phase 2 纯逻辑层 |
 | `sync/multi_agent/*.py` | 状态模型、偏好 Agent、事实 Agent、Writer 和旧多 Agent 编排 | 追问/兼容链路 |
-| `web/index.html` | 三栏工作台骨架、表单、结果区、追问区 | 当前页面入口 |
+| `web/index.html` | 工作台骨架（v2 版）、表单、结果区、追问区 | 唯一页面入口 |
 | `web/app.js` | 请求、状态恢复、结果渲染、编辑、预算重算、导出 | 当前前端逻辑 |
 | `web/styles.css` | 页面布局、结果模块、响应式和打印样式 | 当前视觉样式 |
-| `web/index_v2.html`、`web/styles_v2.css` | 另一版静态资产 | 当前入口未引用 |
 | `tests/test_travelmind_regression.py` | 规划器和前端契约回归 | 当前测试入口 |
 | `tests/evals/` | 离线评测场景、fixture、指标和报告 | 效果护栏 |
 | `async/` | 独立异步 ReAct/MCP/用户 API 示例 | 遗留实验区 |
@@ -181,9 +180,10 @@ Python 全量 py_compile（sync/async/tests）：通过
 node --check web/app.js：通过，Node v24.18.0
 Phase 1 专项测试：5/5 通过
 Phase 2 Contract/集成测试：7/7 通过
-Phase 0 评测：3/3 通过；Phase 1/Phase 2 评测均为 10 个场景，Phase 2 硬约束满足率 0.7500
-python -m unittest discover -s tests -v：38 个通过
-合计测试：38/38 通过
+Phase E 约束链路测试：22/22 通过
+Phase 0 评测：4/4 通过；Phase 1/Phase 2 评测均为 10 个场景，Phase 2 硬约束满足率 0.7500
+python -m unittest discover -s tests -v：60 个通过（2026-08 复测）
+合计测试：60/60 通过
 git diff --check：通过
 ```
 
