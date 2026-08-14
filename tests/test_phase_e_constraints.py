@@ -231,6 +231,28 @@ class IntegrationTests(unittest.TestCase):
             self.assertIn("source_meta", c)
             self.assertIn("selection", c)
 
+    def test_normalize_and_rank_hotels_keeps_over_budget_candidates(self):
+        # 全部候选超预算时，不应清空列表导致酒店组件整体降级；
+        # 应保留候选并显式标记 over_budget。
+        hotels = {
+            "candidates": [
+                {
+                    "id": "h1",
+                    "name": "舒适酒店",
+                    "address": "南山区",
+                    "location": {"lng": 114, "lat": 22},
+                    "cost_estimate": 620,
+                    "cost_source": "category_rule",
+                },
+            ],
+        }
+        prefs = {"destinationCity": "深圳", "hotelLevel": "舒适", "budget": 500, "days": 2}
+        _normalize_and_rank_hotels(hotels, prefs)
+        self.assertEqual(len(hotels["candidates"]), 1)
+        candidate = hotels["candidates"][0]
+        self.assertEqual(candidate["selection"]["status"], "over_budget")
+        self.assertIn("over_price_limit", candidate["selection"]["reasons"])
+
     def test_normalize_weather_facts_structure(self):
         weather = {
             "深圳": "深圳：多云，28~34°C，降水概率30%，风力3级",

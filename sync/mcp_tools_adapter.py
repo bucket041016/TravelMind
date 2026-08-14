@@ -42,6 +42,8 @@ class MCPToolAdapter:
         """异步调用MCP工具"""
         async with Client(self.mcp_server_url) as client:
             result = await client.call_tool(tool_name, kwargs)
+            if not result.content:
+                return f"工具 {tool_name} 返回了空结果。"
             return result.content[0].text
     
     def call_mcp_tool(self, tool_name: str, **kwargs):
@@ -79,9 +81,6 @@ class MCPToolAdapter:
                 tool_input: 工具输入，可以是字典、字符串或其他类型，默认为None
                 **kwargs: 额外参数，可能由LangChain框架传入
             """
-            # 打印工具名称，验证self.name的存在
-            print(f"调用工具: {self.name}")
-            
             # 处理结构化工具直接通过关键字参数调用的情况
             if tool_input is None:
                 if kwargs:
@@ -248,17 +247,6 @@ if __name__ == "__main__":
                 print(f"结果: {result}")
         except Exception as e:
             print(f"get_current_time 调用失败: {e}")
-            
-        # 测试 calculate_bmi 工具
-        try:
-            bmi_tool = next((t for t in tools if t.name == "calculate_bmi"), None)
-            if bmi_tool:
-                print(f"\n测试 'calculate_bmi' 工具...")
-                # 直接调用 _run 方法
-                result = bmi_tool._run({"weight_kg": 70, "height_m": 1.75})
-                print(f"结果: {result}")
-        except Exception as e:
-            print(f"calculate_bmi 调用失败: {e}")
             
         # 测试 get_weather 工具
         try:

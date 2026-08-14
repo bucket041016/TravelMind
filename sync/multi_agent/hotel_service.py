@@ -131,7 +131,23 @@ def _normalize_and_rank_hotels(
         preferences={"interests": [prefs.get("hotelLevel", "")]},
         max_price=max_price,
     )
-    hotels["candidates"] = ranked.get("selected", normalized)
+    selected = ranked.get("selected")
+    if selected:
+        hotels["candidates"] = selected
+    else:
+        # 价格上限等硬过滤可能把候选整组清空（如低预算场景），
+        # 此时回退"仅因价格超限"被拒的真实候选并显式标记，避免酒店组件整体降级。
+        fallback = [
+            item["candidate"]
+            for item in ranked.get("rejected", [])
+            if item.get("reasons") == ["over_price_limit"]
+        ]
+        fallback = fallback or normalized
+        for candidate in fallback:
+            selection = candidate.setdefault("selection", {})
+            selection["status"] = "over_budget"
+            selection.setdefault("reasons", []).append("over_price_limit")
+        hotels["candidates"] = fallback
 
 def _estimate_hotel_price_ranges(
     prefs: dict[str, Any],

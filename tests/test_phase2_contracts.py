@@ -52,6 +52,7 @@ class TravelMindPhase2ContractTests(unittest.TestCase):
         self.assertEqual(candidate["validation"]["status"], "partial")
         self.assertIn("missing_coordinates", candidate["validation"]["errors"])
         self.assertEqual(candidate["source_meta"]["kind"], "rule")
+        self.assertEqual(candidate["source_meta"]["status"], "rule_fallback")
 
     def test_hotel_route_and_weather_contracts_keep_source_metadata(self):
         hotel = normalize_place_candidate(

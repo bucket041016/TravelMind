@@ -1641,7 +1641,7 @@ if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
         host="0.0.0.0",
-        port=int(os.getenv("MCP_PORT", "8083")),
+        port=int(os.getenv("MCP_PORT", "8098")),
         path="/my-custom-path",
         log_level="debug",
     )

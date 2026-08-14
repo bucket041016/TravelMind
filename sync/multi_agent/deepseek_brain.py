@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Any
@@ -20,7 +21,13 @@ class DeepSeekPlanningBrainAgent:
     def __init__(self) -> None:
         self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-        self.timeout = float(os.getenv("DEEPSEEK_PLAN_TIMEOUT_SECONDS", "35"))
+        try:
+            self.timeout = float(os.getenv("DEEPSEEK_PLAN_TIMEOUT_SECONDS", "35"))
+        except (TypeError, ValueError):
+            # 环境变量被配置成非法值时回退默认值，避免整个 planner 构造失败。
+            self.timeout = 35.0
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            self.timeout = 35.0
         self.model = None
         if self.api_key:
             self._sanitize_no_proxy()

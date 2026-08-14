@@ -26,6 +26,9 @@ def _status(value: Any, default: str = "unknown") -> str:
         return "fixture"
     if "error" in text or "失败" in text or "unavailable" in text:
         return "error"
+    # 规则/本地知识库降级必须先于通用 fallback 判定，避免被误标为高德降级。
+    if "rule" in text or "knowledge" in text or "知识库" in text or "本地" in text:
+        return "rule_fallback"
     if "fallback" in text or "降级" in text:
         return "amap_fallback"
     if text in {"live", "success", "used"}:
