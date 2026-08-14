@@ -9,7 +9,7 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 当前用户端主链路是结构化表单 + `/api/plan`；自然语言追问继续走 `/api/multi-agent-chat`。
 
-当前阶段：Phase 0 和 Phase 1 已完成，Phase 2 正在推进事实 Contract、候选归一化与排序基础。
+当前阶段：Phase 0 和 Phase 1 已完成；Phase 2（事实 Contract、候选归一化与排序）进行中，2026-08-14 起新增 Phase 2.5（可选工具增强规划脑，agentic 补查）进入路线图。
 
 ## 2. 当前仓库状态
 

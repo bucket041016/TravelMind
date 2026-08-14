@@ -114,23 +114,35 @@
 - 紧换乘场景的候选排序会把可用真实地点送入规划脑，但远距离 fixture 仍触发规则路线切换；这验证了候选排序不能替代 Phase 3 的全局路线质量门。
 - 当前需继续验证混合来源和严格坐标过滤的 fallback 行为；在此证据完成前，不切换 MCP 供应商返回协议，也不放宽真实地点/坐标护栏。
 
+## 工具增强规划脑预验证发现（2026-08-14）
+
+两轮受控实验验证"DeepSeek 自主调 MCP 工具补查事实"是否可行（脚本在 `output/verify_agentic_plan*.py`，未改业务代码）：
+
+- 第一轮（本地假工具 + 真实 DeepSeek）：2 次 LLM 调用完成并行查 3 工具 + 输出 JSON，地点零编造；但 prompt 只列 3 个字段时模型只输出 3 个字段——**字段漂移实证**，前端 schema 必须显式全字段 + 强校验。
+- 第二轮（真实 MCP + 真实高德 + 真实 DeepSeek）：6 次调用/27.6s，出现自主补查 `search_hotels(near=福田)` 的**真实 agentic 行为**；12 个 item 地点零编造；但 MCP 文本没有稳定 id，模型**自行编造 candidate_id**（`poi_shenzhen_museum`、`el_yunzhongtian` 等）。
+- 附带发现：`search_poi` 因 description 未写明"一次返回全部类别"被重复调用两次（约 9KB 重复内容进上下文）；模型输出带英文前言和 ```json fence（现有 `_parse_json_object` 可兜底）。
+
+结论与铁律：agentic 补查可行且有真实价值，但必须"**后端回填 id + 强 schema 校验 + 只读白名单**"为前提——模型永不生成 id，只能引用后端 `normalize_place_candidates` 给出的 id；补查候选回传后端重新 normalize。据此新增 Phase 2.5（工具增强规划脑），并把 Phase 2.2 升级为"稳定 id 事实层"。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
 
-- 首轮优化顺序已经确定为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序 -> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。
+- 首轮优化顺序已经确定为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 工具增强规划脑（可选 agentic 补查）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
-- Phase 2 当前小步已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；新增可选 `candidate_contracts`，旧 POI/酒店字段和文本 MCP 协议保持不变。
-- 当前评测仍暴露未解决问题：平均硬约束满足率 `0.7500`，低预算/多人预算没有反馈重规划，紧换乘场景仍需要全局路线门槛；Phase 2 的候选排序已接入但 fallback 率略有上升。
-- 已验证：Phase 1 专项测试 `5/5`、Phase 2 专项/集成测试 `7/7`、Phase 0 评测 `3/3`、报告渲染回归 `1/1`、业务回归 `22/22`，合计 `38/38`；Python 全量编译、`node --check web/app.js`、`git diff --check` 通过。
+- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；新增可选 `candidate_contracts`，旧 POI/酒店字段和文本 MCP 协议保持不变；另完成酒店超预算回退标记、来源状态误标修复等收尾修复。
+- 2026-08 收尾修复已推送到 main：v2 替代 v1 成为唯一前端入口、MCP 默认端口统一 8098、样式文件更名 styles.css；全量回归 61/61、评测 4/4 通过。
+- 当前评测仍暴露未解决问题：平均硬约束满足率 `0.7500`，低预算/多人预算没有反馈重规划，紧换乘场景仍需要全局路线门槛；预算偏差 `0.6230`（超预算酒店如实呈现，等待 Phase 3 替换/降级）。
+- Phase 2.5 已写入执行计划（`docs/implementation-plan.md`），前置条件为 Phase 2.2 稳定 id 事实层和 MCPToolAdapter 连接复用。
 
 ### 下一次继续步骤
 
-1. 先读取本文件、`docs/implementation-plan.md` 的 Phase 2、`docs/project-baseline.md` 和 Phase 2 报告摘要。
-2. 补充高德成功、Key 缺失、本地 fallback 和混合来源的 Contract/排序测试，特别记录严格坐标过滤导致的降级。
-3. 根据指标决定保留严格过滤、增加可解释的 partial 候选层，或继续冻结 MCP 供应商协议；不凭感觉放宽真实地点护栏。
-4. 重新运行 Phase 0/1/2 评测、业务回归、Python/Node/diff 检查，再决定是否完成 Phase 2。
+1. 先读取本文件、[target-architecture.md](target-architecture.md)、`docs/implementation-plan.md` 的 Phase 2/2.5 与看板、`docs/project-baseline.md`。
+2. 继续 Phase 2 收尾：补充高德成功、Key 缺失、本地 fallback 和混合来源的 Contract/排序测试；执行 2.8（工具 description 精修、`response_format=json_object`）。
+3. 推进 Phase 2.2 稳定 id 事实层：MCP 结构化返回或后端回溯映射生成 id；这是 Phase 2.5 的硬前提。
+4. Phase 2.5：迁移验证脚本（`output/` → `tools/verify/` 或 `tests/evals/`）、MCPToolAdapter 连接复用、三步灰度（天气 → POI/酒店 → 路线），每步离线评测 + 真实对照，观测字段完整率、id 回溯命中率、调用次数。
+5. 全部改动后重新运行全量回归、离线评测、Python/Node/diff 检查，再决定是否进入 Phase 3。
 
 ### 建议排除出日常上下文的材料
 
