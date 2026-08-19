@@ -13,6 +13,9 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_deepseek import ChatDeepSeek
+from pydantic import BaseModel
+
+from .deepseek_contracts import HotelPriceOutput, PlanOutput, ReviewOutput, RouteJudgement
 
 
 class DeepSeekPlanningBrainAgent:
@@ -101,20 +104,11 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
 
-        last_error = ""
-        for attempt in range(2):
-            prompt = user_prompt
-            if attempt:
-                prompt += f"\n\n上一次输出无法解析为合法 JSON，错误：{last_error}。请只返回 JSON 对象。"
-            try:
-                response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)])
-                content = self._message_content_to_text(response.content)
-                parsed = self._parse_json_object(content)
-                return {"llm_status": "used", "reason": "", "plan": parsed}
-            except Exception as exc:  # noqa: BLE001 - caller needs fallback reason, not exception type.
-                last_error = str(exc)
-
-        return {"llm_status": "parse_failed", "reason": last_error, "plan": None}
+        try:
+            parsed = self._invoke_parsed(system_prompt, user_prompt, PlanOutput)
+        except Exception as exc:  # noqa: BLE001 - caller needs fallback reason, not exception type.
+            return {"llm_status": "parse_failed", "reason": str(exc), "plan": None}
+        return {"llm_status": "used", "reason": "", "plan": parsed}
 
     def estimate_hotel_prices(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:
@@ -133,9 +127,7 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-            content = self._message_content_to_text(response.content)
-            parsed = self._parse_json_object(content)
+            parsed = self._invoke_parsed(system_prompt, user_prompt, HotelPriceOutput)
         except Exception as exc:  # noqa: BLE001 - caller needs a clean fallback path.
             return {"llm_status": "parse_failed", "reason": str(exc), "prices": []}
 
@@ -162,9 +154,7 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-            content = self._message_content_to_text(response.content)
-            parsed = self._parse_json_object(content)
+            parsed = self._invoke_parsed(system_prompt, user_prompt, RouteJudgement)
         except Exception as exc:  # noqa: BLE001 - caller needs clean fallback metadata.
             return {"llm_status": "parse_failed", "reason": str(exc), "judgement": None}
 
@@ -189,9 +179,7 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
-            content = self._message_content_to_text(response.content)
-            parsed = self._parse_json_object(content)
+            parsed = self._invoke_parsed(system_prompt, user_prompt, ReviewOutput)
         except Exception as exc:  # noqa: BLE001 - caller needs clean fallback metadata.
             return {"llm_status": "parse_failed", "reason": str(exc), "review": None}
 
@@ -211,8 +199,32 @@ class DeepSeekPlanningBrainAgent:
             return "\n".join(part for part in parts if part)
         return str(content)
 
+    def _invoke_parsed(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model_cls: type[BaseModel],
+        max_attempts: int = 2,
+    ) -> dict[str, Any]:
+        """调用 DeepSeek 并把输出解析为 model_cls，校验失败时回喂错误重试。"""
+        last_error = ""
+        for attempt in range(max_attempts):
+            prompt = user_prompt
+            if attempt:
+                prompt += (
+                    "\n\n上一次输出无法解析或校验失败，错误："
+                    f"{last_error}\n请严格按 schema 只返回 JSON 对象，不要 Markdown、不要解释。"
+                )
+            try:
+                response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)])
+                content = self._message_content_to_text(response.content)
+                return self._parse_json_object(content, model_cls)
+            except Exception as exc:  # noqa: BLE001 - 错误文本回喂给模型，不抛给调用方。
+                last_error = str(exc)
+        raise ValueError(f"DeepSeek 输出在 {max_attempts} 次尝试内都无法解析/校验：{last_error}")
+
     @staticmethod
-    def _parse_json_object(text: str) -> dict[str, Any]:
+    def _parse_json_object(text: str, model_cls: type[BaseModel]) -> dict[str, Any]:
         cleaned = text.strip()
         fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.S)
         if fenced:
@@ -222,7 +234,4 @@ class DeepSeekPlanningBrainAgent:
             end = cleaned.rfind("}")
             if start >= 0 and end > start:
                 cleaned = cleaned[start : end + 1]
-        data = json.loads(cleaned)
-        if not isinstance(data, dict):
-            raise ValueError("DeepSeek output is not a JSON object")
-        return data
+        return model_cls.model_validate_json(cleaned).model_dump()
