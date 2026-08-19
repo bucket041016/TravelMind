@@ -13,6 +13,7 @@ from .contracts import (
     normalize_point,
     normalize_price_range,
     source_meta,
+    stable_place_id,
 )
 
 
@@ -69,7 +70,9 @@ def normalize_place_candidate(
     has_real_signal = bool(name and (point or address or candidate.get("rating") or candidate.get("type") or candidate.get("photo_url")))
     explicit_real = candidate.get("is_real_place")
     is_real_place = bool(explicit_real) if explicit_real is not None else has_real_signal
-    candidate["id"] = _text(candidate.get("id") or candidate.get("candidate_id"))
+    stable_id = stable_place_id(name=name, location=point)
+    candidate["id"] = _text(candidate.get("id") or candidate.get("candidate_id")) or stable_id
+    candidate["stable_id"] = stable_id
     candidate["name"] = name
     candidate["city"] = _text(candidate.get("city") or city)
     candidate["category"] = category

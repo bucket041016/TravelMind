@@ -223,6 +223,27 @@ def source_meta(
     }
 
 
+def _slug(value: Any) -> str:
+    """归一化为 id 片段：小写、去空白与标点，保留中英文数字与连字符。"""
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", str(value or "").strip().lower()).strip("-")
+
+
+def stable_place_id(*, name: str = "", location: LocationPoint | None = None) -> str:
+    """确定性候选 id：同一地点（名字+坐标）永远得到同一个 id。
+
+    坐标是地点的全局唯一身份，名字用于无坐标时的可读兜底。该 id 只由后端
+    生成，模型只引用、永不生成；后端可用名字/坐标回溯重算完成回填匹配。
+    """
+    parts = [_slug(name)]
+    if location and location.get("lng") is not None and location.get("lat") is not None:
+        try:
+            parts.append(f"{float(location['lng']):.5f}")
+            parts.append(f"{float(location['lat']):.5f}")
+        except (TypeError, ValueError):
+            pass
+    return "-".join(part for part in parts if part)
+
+
 def candidate_key(candidate: dict[str, Any]) -> str:
     """Build a stable identity key for duplicate filtering."""
 

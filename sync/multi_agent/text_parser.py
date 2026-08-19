@@ -10,6 +10,8 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from .contracts import stable_place_id
+
 
 def _extract_prefixed_line(text: str, prefix: str) -> str:
     for line in text.splitlines():
@@ -122,8 +124,10 @@ def _parse_numbered_section(text: str, heading: str) -> list[dict[str, Any]]:
         description = value[len(name):].strip(" ：；")
         cost = _extract_float(value, r"人均约\s*([0-9.]+)\s*元")
         cost_estimate = round(float(cost)) if cost else 0
+        location = _extract_location(value)
         item = {
-            "id": _make_item_id(heading, len(items) + 1, name),
+            # 稳定 id：名字+坐标，由后端生成；模型只引用、永不生成。
+            "id": stable_place_id(name=name, location=location),
             "name": name,
             "description": _clean_description(description or value),
             "rating": _extract_float(value, r"评分\s*([0-9.]+)"),
@@ -143,7 +147,7 @@ def _parse_numbered_section(text: str, heading: str) -> list[dict[str, Any]]:
             ),
             "address": _extract_address(value),
             "type": _extract_poi_type(value),
-            "location": _extract_location(value),
+            "location": location,
             "photo_url": _extract_photo_url(value),
             "raw": value,
         }
