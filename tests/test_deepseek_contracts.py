@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from sync.multi_agent.deepseek_brain import DeepSeekPlanningBrainAgent
+from sync.multi_agent.deepseek_brain import DeepSeekInvocationError, DeepSeekPlanningBrainAgent
 from sync.multi_agent.deepseek_contracts import (
     HotelPriceOutput,
     PlanOutput,
@@ -31,6 +31,18 @@ class _FakeModel:
         index = min(self.calls, len(self.responses) - 1)
         self.calls += 1
         return _FakeResponse(self.responses[index])
+
+
+class _RaisingModel:
+    """invoke 直接抛错的模型替身，用于 call 类错误分类测试。"""
+
+    def __init__(self, error: Exception):
+        self.error = error
+        self.calls = 0
+
+    def invoke(self, messages, **kwargs):
+        self.calls += 1
+        raise self.error
 
 
 class TravelMindDeepSeekContractTests(unittest.TestCase):
@@ -73,28 +85,93 @@ class TravelMindDeepSeekContractTests(unittest.TestCase):
         raw = (
             '{"overall_score":"85","route_score":80.5,"pace_score":90,'
             '"cluster_score":70,"logic_score":75,"needs_repair":"true",'
-            '"issues":[],"fixes":[]}'
+            '"issues":[],"fixes":[],"repaired_plan":{"days":[]}}'
         )
         parsed = DeepSeekPlanningBrainAgent._parse_json_object(raw, ReviewOutput)
         self.assertEqual(parsed["overall_score"], 85.0)
         self.assertEqual(parsed["route_score"], 80.5)
         self.assertIs(parsed["needs_repair"], True)
 
+    def test_review_requires_repaired_plan_when_needs_repair(self):
+        raw = (
+            '{"overall_score":80,"route_score":80,"pace_score":80,'
+            '"cluster_score":80,"logic_score":80,"needs_repair":true}'
+        )
+        with self.assertRaises(ValidationError):
+            DeepSeekPlanningBrainAgent._parse_json_object(raw, ReviewOutput)
+
+    def test_review_allows_missing_repaired_plan_without_repair(self):
+        raw = (
+            '{"overall_score":80,"route_score":80,"pace_score":80,'
+            '"cluster_score":80,"logic_score":80,"needs_repair":false}'
+        )
+        parsed = DeepSeekPlanningBrainAgent._parse_json_object(raw, ReviewOutput)
+        self.assertIs(parsed["needs_repair"], False)
+        self.assertIsNone(parsed["repaired_plan"])
+
     def test_invoke_parsed_retries_with_feedback(self):
         brain = DeepSeekPlanningBrainAgent()
         brain.model = _FakeModel(['{"days":"oops"}', '{"days":[]}'])
-        parsed = brain._invoke_parsed("system", "user", PlanOutput)
+        parsed, attempt_count = brain._invoke_parsed("system", "user", PlanOutput)
         self.assertEqual(parsed["days"], [])
+        self.assertEqual(attempt_count, 2)
         self.assertEqual(brain.model.calls, 2)
         human = brain.model.last_messages[1]
         self.assertIn("上一次输出无法解析或校验失败", human.content)
 
-    def test_invoke_parsed_raises_after_exhausting_retries(self):
+    def test_invoke_parsed_raises_schema_error_after_exhausting_retries(self):
         brain = DeepSeekPlanningBrainAgent()
         brain.model = _FakeModel(['{"days":"oops"}', '{"days":"still-oops"}'])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(DeepSeekInvocationError) as ctx:
             brain._invoke_parsed("system", "user", PlanOutput)
+        self.assertEqual(ctx.exception.error_kind, "schema")
+        self.assertEqual(ctx.exception.attempt_count, 2)
         self.assertEqual(brain.model.calls, 2)
+
+    def test_invoke_parsed_classifies_call_errors(self):
+        brain = DeepSeekPlanningBrainAgent()
+        brain.model = _RaisingModel(RuntimeError("connection reset"))
+        with self.assertRaises(DeepSeekInvocationError) as ctx:
+            brain._invoke_parsed("system", "user", PlanOutput)
+        self.assertEqual(ctx.exception.error_kind, "call")
+        self.assertEqual(ctx.exception.attempt_count, 2)
+        self.assertEqual(brain.model.calls, 2)
+
+    def test_plan_reports_unavailable_with_fallback_metadata(self):
+        brain = DeepSeekPlanningBrainAgent()
+        brain.model = None
+        result = brain.plan({"days": 2})
+        self.assertEqual(result["llm_status"], "unavailable")
+        self.assertEqual(result["error_kind"], "unavailable")
+        self.assertEqual(result["attempt_count"], 0)
+        self.assertEqual(result["fallback_reason"], "deepseek_unavailable")
+        self.assertIsNone(result["plan"])
+
+    def test_plan_reports_schema_failed_with_fallback_metadata(self):
+        brain = DeepSeekPlanningBrainAgent()
+        brain.model = _FakeModel(["not-json", '{"days":"oops"}'])
+        result = brain.plan({})
+        self.assertEqual(result["llm_status"], "schema_failed")
+        self.assertEqual(result["error_kind"], "schema")
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertEqual(result["fallback_reason"], "deepseek_schema_failed")
+        self.assertIsNone(result["plan"])
+
+    def test_plan_reports_call_failed_with_fallback_metadata(self):
+        brain = DeepSeekPlanningBrainAgent()
+        brain.model = _RaisingModel(RuntimeError("rate limited"))
+        result = brain.plan({})
+        self.assertEqual(result["llm_status"], "call_failed")
+        self.assertEqual(result["error_kind"], "call")
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertEqual(result["fallback_reason"], "deepseek_call_failed")
+
+    def test_plan_reports_used_with_attempt_count_after_retry(self):
+        brain = DeepSeekPlanningBrainAgent()
+        brain.model = _FakeModel(['{"days":"oops"}', '{"days":[]}'])
+        result = brain.plan({})
+        self.assertEqual(result["llm_status"], "used")
+        self.assertEqual(result["attempt_count"], 2)
 
 
 if __name__ == "__main__":

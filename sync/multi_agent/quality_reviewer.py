@@ -51,7 +51,14 @@ def _review_and_repair_itinerary(
 
     result = self.deepseek_brain.review_itinerary(payload)
     if result.get("llm_status") != "used":
-        return {"itinerary_days": itinerary_days, "quality_review": _rule_quality_review(prefs, itinerary_days)}
+        return {
+            "itinerary_days": itinerary_days,
+            "quality_review": _rule_quality_review(prefs, itinerary_days),
+            "llm_status": result.get("llm_status"),
+            "error_kind": result.get("error_kind"),
+            "attempt_count": result.get("attempt_count"),
+            "fallback_reason": result.get("fallback_reason"),
+        }
 
     review = _normalize_quality_review(result.get("review"), "deepseek")
     repaired_days = itinerary_days
@@ -94,7 +101,12 @@ def _review_and_repair_itinerary(
     if not review["issues"]:
         rule_review = _rule_quality_review(prefs, repaired_days)
         review["issues"] = rule_review.get("issues", [])
-    return {"itinerary_days": repaired_days, "quality_review": review}
+    return {
+        "itinerary_days": repaired_days,
+        "quality_review": review,
+        "llm_status": "used",
+        "attempt_count": result.get("attempt_count"),
+    }
 
 def _repair_plan_uses_known_candidates(plan: dict[str, Any], lookup: dict[str, dict[str, Any]]) -> bool:
     raw_days = plan.get("days") if isinstance(plan.get("days"), list) else []

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _coerce_bool(value: Any) -> Any:
@@ -155,6 +155,12 @@ class ReviewOutput(BaseModel):
     repaired_plan: PlanOutput | None = Field(default=None, description="needs_repair=true 时的返工方案。")
 
     _v_needs_repair = field_validator("needs_repair", mode="before")(_coerce_bool)
+
+    @model_validator(mode="after")
+    def _require_repaired_plan_when_needs_repair(self):
+        if self.needs_repair and self.repaired_plan is None:
+            raise ValueError("needs_repair=true 时必须提供 repaired_plan")
+        return self
 
 
 # 方法名 -> 对应输出契约，供 deepseek_brain._parse_json_object 统一按模型解析。

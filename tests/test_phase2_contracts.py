@@ -292,6 +292,20 @@ class _UnavailableBrain:
         return self._result("review")
 
 
+class _SchemaFailedBrain(_UnavailableBrain):
+    """plan 固定 schema_failed，其余调用走不可用降级（D11 trace 测试）。"""
+
+    def plan(self, payload):
+        return {
+            "llm_status": "schema_failed",
+            "reason": "DeepSeek 输出在 2 次尝试内都无法解析/校验：bad json",
+            "error_kind": "schema",
+            "attempt_count": 2,
+            "fallback_reason": "deepseek_schema_failed",
+            "plan": None,
+        }
+
+
 class TravelMindCandidateContractsWiringTests(unittest.TestCase):
     """D2：run() 产出可选、版本化 candidate_contracts，旧字段保持兼容。"""
 
@@ -336,6 +350,104 @@ class TravelMindCandidateContractsWiringTests(unittest.TestCase):
             len(response["candidate_contracts"]["pois"]["attractions"]),
             len([item for item in response["pois"]["attractions"] if item.get("location") or item.get("is_real_place")]),
         )
+
+
+class TravelMindDegradationTraceTests(unittest.TestCase):
+    """D11：trace 状态区分 used/retry_success/schema_failed/call_failed/rule_fallback。"""
+
+    def _planner(self) -> StructuredTravelPlanner:
+        return StructuredTravelPlanner("fixture://phase2-d11")
+
+    def test_record_derives_llm_trace_status(self):
+        planner = self._planner()
+        prefs = planner._normalize_preferences({"destinationCity": "深圳"})
+        trace: list[dict[str, str]] = []
+
+        planner._record(
+            trace,
+            "DeepSeekPlanningBrainAgent 智能规划脑",
+            prefs,
+            lambda: {"llm_status": "used", "attempt_count": 1, "itinerary_days": []},
+        )
+        self.assertEqual(trace[-1]["status"], "used")
+
+        trace.clear()
+        planner._record(
+            trace,
+            "DeepSeekPlanningBrainAgent 智能规划脑",
+            prefs,
+            lambda: {"llm_status": "used", "attempt_count": 2, "itinerary_days": []},
+        )
+        self.assertEqual(trace[-1]["status"], "retry_success")
+
+        trace.clear()
+        planner._record(
+            trace,
+            "DeepSeekPlanningBrainAgent 智能规划脑",
+            prefs,
+            lambda: {
+                "llm_status": "schema_failed",
+                "reason": "bad json",
+                "error_kind": "schema",
+                "attempt_count": 2,
+                "fallback_reason": "deepseek_schema_failed",
+                "plan": None,
+            },
+        )
+        self.assertEqual(trace[-1]["status"], "schema_failed")
+
+        trace.clear()
+        planner._record(
+            trace,
+            "DeepSeekPlanningBrainAgent 智能规划脑",
+            prefs,
+            lambda: {
+                "llm_status": "call_failed",
+                "reason": "timeout",
+                "error_kind": "call",
+                "attempt_count": 2,
+                "fallback_reason": "deepseek_call_failed",
+                "plan": None,
+            },
+        )
+        self.assertEqual(trace[-1]["status"], "call_failed")
+
+    def test_record_keeps_success_for_non_llm_results(self):
+        planner = self._planner()
+        prefs = planner._normalize_preferences({"destinationCity": "深圳"})
+        trace: list[dict[str, str]] = []
+        planner._record(trace, "WeatherAgent 天气与出行建议", prefs, lambda: {"深圳": "晴"})
+        self.assertEqual(trace[-1]["status"], "success")
+
+    def test_rule_fallback_step_records_rule_fallback_status(self):
+        planner = self._planner()
+        prefs = planner._normalize_preferences({"destinationCity": "深圳"})
+        trace: list[dict[str, str]] = []
+        planner._record(trace, "DayPlannerAgent 规则降级行程", prefs, lambda: [], status_hint="rule_fallback")
+        self.assertEqual(trace[-1]["status"], "rule_fallback")
+
+    def test_run_reports_schema_failed_trace_and_rule_fallback(self):
+        planner = StructuredTravelPlanner("fixture://phase2-d11-run")
+        planner.toolbox = _FakeRunToolbox()
+        planner.deepseek_brain = _SchemaFailedBrain()
+
+        response = planner.run(
+            {
+                "originCity": "广州",
+                "destinationCity": "深圳",
+                "startDate": "2026-08-15",
+                "days": 2,
+            }
+        )
+
+        self.assertEqual(response["llm_status"], "schema_failed")
+        self.assertEqual(response["planning_mode"], "rule_fallback")
+        brain_step = next(step for step in response["trace"] if step["name"] == "DeepSeekPlanningBrainAgent 智能规划脑")
+        self.assertEqual(brain_step["status"], "schema_failed")
+        self.assertIn("deepseek_schema_failed", brain_step["output"])
+        day_step = next(step for step in response["trace"] if step["name"] == "DayPlannerAgent 规则降级行程")
+        self.assertEqual(day_step["status"], "rule_fallback")
+        self.assertTrue(response["itinerary_days"])
 
 
 if __name__ == "__main__":

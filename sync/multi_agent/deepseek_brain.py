@@ -18,6 +18,18 @@ from pydantic import BaseModel
 from .deepseek_contracts import HotelPriceOutput, PlanOutput, ReviewOutput, RouteJudgement
 
 
+class DeepSeekInvocationError(ValueError):
+    """DeepSeek 输出在重试预算内仍无法使用：携带错误分类与尝试次数（D11）。
+
+    error_kind: "schema"（输出无法解析/校验）| "call"（调用/网络/鉴权/超时）。
+    """
+
+    def __init__(self, *, error_kind: str, attempt_count: int, message: str):
+        super().__init__(message)
+        self.error_kind = error_kind
+        self.attempt_count = attempt_count
+
+
 class DeepSeekPlanningBrainAgent:
     """Use DeepSeek as the planning brain while keeping AMap as the fact source."""
 
@@ -74,9 +86,31 @@ class DeepSeekPlanningBrainAgent:
                     pass
             os.environ[var_name] = ",".join(safe)
 
+    def _unavailable(self, key: str, default: Any = None) -> dict[str, Any]:
+        return {
+            "llm_status": "unavailable",
+            "reason": "DEEPSEEK_API_KEY missing",
+            "error_kind": "unavailable",
+            "attempt_count": 0,
+            "fallback_reason": "deepseek_unavailable",
+            key: default,
+        }
+
+    @staticmethod
+    def _degraded(exc: DeepSeekInvocationError, key: str, default: Any = None) -> dict[str, Any]:
+        llm_status = "schema_failed" if exc.error_kind == "schema" else "call_failed"
+        return {
+            "llm_status": llm_status,
+            "reason": str(exc),
+            "error_kind": exc.error_kind,
+            "attempt_count": exc.attempt_count,
+            "fallback_reason": f"deepseek_{llm_status}",
+            key: default,
+        }
+
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:
-            return {"llm_status": "unavailable", "reason": "DEEPSEEK_API_KEY missing", "plan": None}
+            return self._unavailable("plan")
 
         system_prompt = (
             "你是 TravelMind 的智能行程规划脑。你必须基于给定的高德候选 POI、酒店、交通、天气和用户偏好规划行程。"
@@ -105,14 +139,14 @@ class DeepSeekPlanningBrainAgent:
         )
 
         try:
-            parsed = self._invoke_parsed(system_prompt, user_prompt, PlanOutput)
-        except Exception as exc:  # noqa: BLE001 - caller needs fallback reason, not exception type.
-            return {"llm_status": "parse_failed", "reason": str(exc), "plan": None}
-        return {"llm_status": "used", "reason": "", "plan": parsed}
+            parsed, attempt_count = self._invoke_parsed(system_prompt, user_prompt, PlanOutput)
+        except DeepSeekInvocationError as exc:
+            return self._degraded(exc, "plan")
+        return {"llm_status": "used", "reason": "", "attempt_count": attempt_count, "plan": parsed}
 
     def estimate_hotel_prices(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:
-            return {"llm_status": "unavailable", "reason": "DEEPSEEK_API_KEY missing", "prices": []}
+            return self._unavailable("prices", [])
 
         system_prompt = (
             "你是 TravelMind 的酒店价格常识估算助手。你只能给非实时常识区间，"
@@ -127,16 +161,16 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            parsed = self._invoke_parsed(system_prompt, user_prompt, HotelPriceOutput)
-        except Exception as exc:  # noqa: BLE001 - caller needs a clean fallback path.
-            return {"llm_status": "parse_failed", "reason": str(exc), "prices": []}
+            parsed, attempt_count = self._invoke_parsed(system_prompt, user_prompt, HotelPriceOutput)
+        except DeepSeekInvocationError as exc:
+            return self._degraded(exc, "prices", [])
 
         prices = parsed.get("prices") if isinstance(parsed.get("prices"), list) else []
-        return {"llm_status": "used", "reason": "", "prices": prices}
+        return {"llm_status": "used", "reason": "", "attempt_count": attempt_count, "prices": prices}
 
     def judge_route(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:
-            return {"llm_status": "unavailable", "reason": "DEEPSEEK_API_KEY missing", "judgement": None}
+            return self._unavailable("judgement")
 
         system_prompt = (
             "你是 TravelMind 的路线体验评审。高德和后端规则负责路线事实，你只判断这段移动放在当天行程里是否合理。"
@@ -154,15 +188,15 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            parsed = self._invoke_parsed(system_prompt, user_prompt, RouteJudgement)
-        except Exception as exc:  # noqa: BLE001 - caller needs clean fallback metadata.
-            return {"llm_status": "parse_failed", "reason": str(exc), "judgement": None}
+            parsed, attempt_count = self._invoke_parsed(system_prompt, user_prompt, RouteJudgement)
+        except DeepSeekInvocationError as exc:
+            return self._degraded(exc, "judgement")
 
-        return {"llm_status": "used", "reason": "", "judgement": parsed}
+        return {"llm_status": "used", "reason": "", "attempt_count": attempt_count, "judgement": parsed}
 
     def review_itinerary(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.model:
-            return {"llm_status": "unavailable", "reason": "DEEPSEEK_API_KEY missing", "review": None}
+            return self._unavailable("review")
 
         system_prompt = (
             "你是 TravelMind 的行程质量体检员。你只基于输入中的真实候选、路线事实、用户偏好检查行程质量。"
@@ -179,11 +213,11 @@ class DeepSeekPlanningBrainAgent:
             f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
         )
         try:
-            parsed = self._invoke_parsed(system_prompt, user_prompt, ReviewOutput)
-        except Exception as exc:  # noqa: BLE001 - caller needs clean fallback metadata.
-            return {"llm_status": "parse_failed", "reason": str(exc), "review": None}
+            parsed, attempt_count = self._invoke_parsed(system_prompt, user_prompt, ReviewOutput)
+        except DeepSeekInvocationError as exc:
+            return self._degraded(exc, "review")
 
-        return {"llm_status": "used", "reason": "", "review": parsed}
+        return {"llm_status": "used", "reason": "", "attempt_count": attempt_count, "review": parsed}
 
     @staticmethod
     def _message_content_to_text(content: Any) -> str:
@@ -205,10 +239,17 @@ class DeepSeekPlanningBrainAgent:
         user_prompt: str,
         model_cls: type[BaseModel],
         max_attempts: int = 2,
-    ) -> dict[str, Any]:
-        """调用 DeepSeek 并把输出解析为 model_cls，校验失败时回喂错误重试。"""
+    ) -> tuple[dict[str, Any], int]:
+        """调用 DeepSeek 并把输出解析为 model_cls，校验失败时回喂错误重试。
+
+        返回 (parsed, attempt_count)。重试预算耗尽抛 DeepSeekInvocationError，
+        error_kind 区分 schema（输出无法解析/校验）与 call（调用/网络/鉴权/超时）。
+        """
         last_error = ""
+        last_kind = "call"
+        attempt_count = 0
         for attempt in range(max_attempts):
+            attempt_count += 1
             prompt = user_prompt
             if attempt:
                 prompt += (
@@ -217,11 +258,21 @@ class DeepSeekPlanningBrainAgent:
                 )
             try:
                 response = self.model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)])
-                content = self._message_content_to_text(response.content)
-                return self._parse_json_object(content, model_cls)
-            except Exception as exc:  # noqa: BLE001 - 错误文本回喂给模型，不抛给调用方。
+            except Exception as exc:  # noqa: BLE001 - 错误分类后统一回喂/抛出。
                 last_error = str(exc)
-        raise ValueError(f"DeepSeek 输出在 {max_attempts} 次尝试内都无法解析/校验：{last_error}")
+                last_kind = "call"
+                continue
+            try:
+                content = self._message_content_to_text(response.content)
+                return self._parse_json_object(content, model_cls), attempt_count
+            except Exception as exc:  # noqa: BLE001 - 输出质量问题按 schema 分类。
+                last_error = str(exc)
+                last_kind = "schema"
+        raise DeepSeekInvocationError(
+            error_kind=last_kind,
+            attempt_count=attempt_count,
+            message=f"DeepSeek 输出在 {max_attempts} 次尝试内都无法解析/校验：{last_error}",
+        )
 
     @staticmethod
     def _parse_json_object(text: str, model_cls: type[BaseModel]) -> dict[str, Any]:

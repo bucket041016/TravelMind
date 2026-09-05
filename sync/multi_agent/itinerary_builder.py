@@ -258,6 +258,9 @@ def _build_deepseek_itinerary_days(
             "llm_status": brain_result.get("llm_status", "fallback"),
             "planning_mode": "rule_fallback",
             "reason": brain_result.get("reason", "DeepSeek unavailable"),
+            "error_kind": brain_result.get("error_kind"),
+            "attempt_count": brain_result.get("attempt_count"),
+            "fallback_reason": brain_result.get("fallback_reason"),
             "itinerary_days": [],
         }
 
@@ -272,9 +275,10 @@ def _build_deepseek_itinerary_days(
     item_count = sum(len(day.get("items", [])) for day in itinerary_days)
     if item_count < max(2, prefs["days"] * 2):
         return {
-            "llm_status": "parse_failed",
+            "llm_status": "schema_failed",
             "planning_mode": "rule_fallback",
             "reason": "DeepSeek itinerary did not contain enough usable items",
+            "fallback_reason": "itinerary_insufficient_items",
             "itinerary_days": [],
         }
 
@@ -282,6 +286,7 @@ def _build_deepseek_itinerary_days(
         "llm_status": "used",
         "planning_mode": "deepseek_hybrid",
         "reason": "DeepSeek generated itinerary from AMap candidates",
+        "attempt_count": brain_result.get("attempt_count"),
         "itinerary_days": itinerary_days,
     }
 

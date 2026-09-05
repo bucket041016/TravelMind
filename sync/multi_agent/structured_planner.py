@@ -228,6 +228,7 @@ class StructuredTravelPlanner:
                 "DayPlannerAgent 规则降级行程",
                 prefs,
                 lambda: self._build_itinerary_days(prefs, routes, local_transport, hotels, pois, weather),
+                status_hint="rule_fallback",
             )
         self._apply_preference_safety_to_itinerary(prefs, itinerary_days)
         self._assign_day_primary_clusters(itinerary_days)
@@ -304,14 +305,19 @@ class StructuredTravelPlanner:
         name: str,
         prefs: dict[str, Any],
         action: Callable[[], Any],
+        *,
+        status_hint: str | None = None,
     ) -> Any:
         start = perf_counter()
-        status = "success"
+        status = status_hint or "success"
         try:
             result = action()
         except Exception as exc:
             status = "error"
             result = self._fallback_for_agent(name, str(exc))
+
+        if status == "success" and isinstance(result, dict):
+            status = self._llm_trace_status(result) or status
 
         trace.append(
             {
@@ -323,6 +329,23 @@ class StructuredTravelPlanner:
             }
         )
         return result
+
+    @staticmethod
+    def _llm_trace_status(result: dict[str, Any]) -> str | None:
+        """业务结果携带 llm_status 时细化 trace 状态（D11，Phase 2.5 铁律 5）。
+
+        used 且 attempt_count>1 记 retry_success；schema_failed/call_failed/
+        unavailable 原样区分；业务函数返回降级对象不得记成普通 success。
+        """
+        llm_status = result.get("llm_status")
+        if not llm_status:
+            return None
+        if llm_status == "used":
+            attempts = result.get("attempt_count")
+            return "retry_success" if isinstance(attempts, int) and attempts > 1 else "used"
+        if llm_status in {"schema_failed", "call_failed", "unavailable"}:
+            return str(llm_status)
+        return None
 
     @staticmethod
     def _fallback_for_agent(name: str, error: str) -> Any:
