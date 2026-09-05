@@ -12,6 +12,7 @@ from .text_parser import (
 )
 from .fact_normalizer import normalize_place_candidate
 from .candidate_ranker import rank_candidates
+from .structured_result import parse_hotel_response
 
 def _parse_price_range(value) -> dict | None:
     import re as _re
@@ -46,13 +47,17 @@ def _normalize_price_confidence(value, default: str = "unknown") -> str:
 
 def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
     provider_message = self.hotel_provider.message()
-    raw = self.toolbox.call(
+    result = self.toolbox.call_structured(
         "search_hotels",
         city=prefs["destinationCity"],
         hotel_level=prefs["hotelLevel"],
         limit=6,
     )
-    candidates = _parse_numbered_section(raw, "酒店候选")
+    parsed = parse_hotel_response(result)
+    if parsed is not None:
+        candidates = parsed.candidates
+    else:
+        candidates = _parse_numbered_section(result.text, "酒店候选")
     fallback_price = _hotel_reference_price(prefs["hotelLevel"])
     ai_price_estimates = _estimate_hotel_price_ranges(prefs, candidates, deepseek_brain=self.deepseek_brain)
     for candidate in candidates:
@@ -90,10 +95,18 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
             f"{_hotel_nearby_label(candidate)}，{prefs['hotelLevel']}档住宿，"
             "便于换乘、晚间返程和寄存行李。"
         )
-    status = "amap_fallback" if "provider_status=amap_fallback" in raw else self.hotel_provider.status()
+    status = (
+        (parsed.provider_status or self.hotel_provider.status())
+        if parsed is not None
+        else ("amap_fallback" if "provider_status=amap_fallback" in result.text else self.hotel_provider.status())
+    )
     if status == "live":
         status = "amap_fallback"
-    area_recommendation = _extract_prefixed_line(raw, "住宿区域建议")
+    area_recommendation = (
+        parsed.area_recommendation
+        if parsed is not None
+        else _extract_prefixed_line(result.text, "住宿区域建议")
+    )
     if _is_generic_hotel_area(area_recommendation):
         area_recommendation = _hotel_area_from_candidates(prefs, candidates)
     return {
@@ -101,7 +114,7 @@ def _build_hotels(self, prefs: dict[str, Any]) -> dict[str, Any]:
         "candidates": candidates,
         "provider_status": status,
         "notes": [provider_message, "酒店候选来自 POI 搜索，不代表实时房态或可预订价格。"],
-        "raw": raw,
+        "raw": result.text,
     }
 
 

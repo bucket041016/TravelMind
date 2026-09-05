@@ -11,6 +11,7 @@ from .text_parser import (
 )
 from .fact_normalizer import normalize_place_candidates
 from .candidate_ranker import rank_candidates
+from .structured_result import parse_poi_response
 
 def _point_distance_km(start: dict, end: dict) -> float:
     import math
@@ -23,20 +24,28 @@ def _point_distance_km(start: dict, end: dict) -> float:
 
 
 def _build_pois(self, prefs: dict[str, Any]) -> dict[str, Any]:
-    raw = self.toolbox.call(
+    result = self.toolbox.call_structured(
         "search_poi",
         city=prefs["destinationCity"],
         preference="、".join(prefs["interests"]),
     )
-    attractions = _parse_numbered_section(raw, "景点/活动") or _parse_numbered_section(raw, "经典景点")
-    real_foods = _parse_numbered_section(raw, "美食/餐厅")
-    specialty_places = _parse_numbered_section(raw, "特色店铺参考")
-    generic_foods = _parse_numbered_section(raw, "地方特色美食")
+    parsed = parse_poi_response(result)
+    if parsed is not None:
+        attractions = parsed.attractions
+        real_foods = parsed.foods
+        specialty_places = parsed.specialty_places
+        generic_foods = parsed.generic_foods
+    else:
+        text = result.text
+        attractions = _parse_numbered_section(text, "景点/活动") or _parse_numbered_section(text, "经典景点")
+        real_foods = _parse_numbered_section(text, "美食/餐厅")
+        specialty_places = _parse_numbered_section(text, "特色店铺参考")
+        generic_foods = _parse_numbered_section(text, "地方特色美食")
     return {
         "attractions": attractions,
         "foods": real_foods or specialty_places or generic_foods,
         "specialty_places": specialty_places,
-        "raw": raw,
+        "raw": result.text,
     }
 
 

@@ -575,7 +575,7 @@ def _amap_local_segment(
     if toolbox is None:
         return _rule_local_segment(day_number, previous, current, mode, distance_km, "fallback", "toolbox not available")
     try:
-        raw = toolbox.call(
+        raw = toolbox.call_text(
             "amap_plan_routes",
             origin=previous["detail"],
             destination=current["detail"],

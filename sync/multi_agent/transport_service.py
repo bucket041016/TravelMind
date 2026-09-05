@@ -21,7 +21,7 @@ def _build_intercity_transport(self, prefs: dict[str, Any]) -> dict[str, Any]:
     amap_modes = [mode for mode in modes if mode in {"rail", "driving"}]
     route_text = ""
     if amap_modes:
-        route_text = self.toolbox.call(
+        route_text = self.toolbox.call_text(
             "amap_plan_routes",
             origin=origin,
             destination=destination,

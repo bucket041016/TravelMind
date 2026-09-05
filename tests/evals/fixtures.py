@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+try:
+    from sync.mcp_tools_adapter import MCPToolResult
+except ModuleNotFoundError:  # pragma: no cover - direct script execution fallback
+    from mcp_tools_adapter import MCPToolResult
+
 
 @dataclass(frozen=True)
 class EvalScenario:
@@ -54,6 +59,12 @@ class FixtureToolbox:
         if tool_name == "estimate_budget":
             return "预算参考：按高德候选和规则估算。"
         return "fixture response"
+
+    def call_text(self, tool_name: str, **kwargs: Any) -> str:
+        return self.call(tool_name, **kwargs)
+
+    def call_structured(self, tool_name: str, **kwargs: Any) -> MCPToolResult:
+        return MCPToolResult.from_value(tool_name, self.call(tool_name, **kwargs))
 
     def _poi_response(self) -> str:
         city = str(self.scenario.payload.get("destinationCity") or "深圳")

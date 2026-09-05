@@ -15,7 +15,7 @@ from .fact_normalizer import normalize_weather_fact
 def _build_weather(self, prefs: dict[str, Any]) -> dict[str, str]:
     result = {}
     for city in dict.fromkeys([prefs["originCity"], prefs["destinationCity"]]):
-        result[city] = self.toolbox.call("get_weather", city=city, date=prefs["startDate"])
+        result[city] = self.toolbox.call_text("get_weather", city=city, date=prefs["startDate"])
     return result
 
 def _build_weather_advice(weather: dict[str, str]) -> dict[str, str]:

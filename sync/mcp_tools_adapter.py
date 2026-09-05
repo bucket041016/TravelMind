@@ -4,22 +4,58 @@ MCP工具适配器 - 将MCP Server工具转换为LangChain工具
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Callable, Union, Type
 from fastmcp import Client
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field, create_model
 from functools import wraps
 
+
+@dataclass
+class MCPToolResult:
+    """MCP 工具调用的稳定结果封装（D12）。
+
+    - text: 始终可用的字符串形式；结构化返回时为 JSON 文本。
+    - data: 结构化数据（dict/list）；无结构化内容时为 None。
+    - source: structured_data | text_json | text_only | empty。
+    - validation_error: 上层响应解析器回填的校验摘要（如坏元素过滤计数）。
+    """
+
+    tool_name: str
+    text: str
+    data: Any = None
+    source: str = "text_only"
+    validation_error: str = ""
+
+    @classmethod
+    def from_value(cls, tool_name: str, value: Any) -> "MCPToolResult":
+        """把任意返回值归一化为封装；测试替身与非标准适配器复用。"""
+        if isinstance(value, MCPToolResult):
+            return value
+        if isinstance(value, (dict, list)):
+            return cls(tool_name, json.dumps(value, ensure_ascii=False), value, "structured_data")
+        if isinstance(value, str):
+            if not value.strip():
+                return cls(tool_name, f"工具 {tool_name} 返回了空结果。", None, "empty")
+            parsed = MCPToolAdapter._coerce_structured(value)
+            if isinstance(parsed, (dict, list)):
+                return cls(tool_name, value, parsed, "text_json")
+            return cls(tool_name, value, None, "text_only")
+        return cls(tool_name, f"工具 {tool_name} 返回了空结果。", None, "empty")
+
+
 class MCPToolAdapter:
     """
     将MCP Server工具转换为LangChain工具的适配器类
     """
-    def __init__(self, mcp_server_url: str):
+    def __init__(self, mcp_server_url):
         """
         初始化MCP工具适配器
-        
+
         Args:
-            mcp_server_url: MCP服务器URL，例如 "http://127.0.0.1:8083/my-custom-path"
+            mcp_server_url: MCP服务器URL，例如 "http://127.0.0.1:8098/my-custom-path"。
+                也接受 FastMCP Server 实例（内存直连，用于协议级测试）。
         """
         self.mcp_server_url = mcp_server_url
         self.mcp_tools_cache = None  # 缓存MCP工具列表
@@ -38,16 +74,53 @@ class MCPToolAdapter:
         """同步获取MCP工具列表"""
         return asyncio.run(self._get_mcp_tools_async())
     
-    async def call_mcp_tool_async(self, tool_name: str, **kwargs):
-        """异步调用MCP工具"""
+    async def call_mcp_tool_result_async(self, tool_name: str, **kwargs) -> MCPToolResult:
+        """异步调用MCP工具并返回稳定结果封装。
+
+        结构化数据优先取 FastMCP 解包后的 result.data（即 structured_content 的
+        解包值；直接读 structured_content 会碰到 {"result": ...} wrap 协议细节），
+        JSON 文本解析只作兜底。工具级错误保持异常传播（ToolError）。
+        """
         async with Client(self.mcp_server_url) as client:
             result = await client.call_tool(tool_name, kwargs)
-            if not result.content:
-                return f"工具 {tool_name} 返回了空结果。"
-            return result.content[0].text
-    
-    def call_mcp_tool(self, tool_name: str, **kwargs):
-        """同步调用MCP工具"""
+        if not result.content:
+            return MCPToolResult(tool_name, f"工具 {tool_name} 返回了空结果。", None, "empty")
+        text = getattr(result.content[0], "text", "")
+        if not isinstance(text, str) or not text.strip():
+            return MCPToolResult(tool_name, f"工具 {tool_name} 返回了空结果。", None, "empty")
+        data = result.data
+        if isinstance(data, BaseModel):
+            data = data.model_dump()
+        if isinstance(data, (dict, list)):
+            return MCPToolResult(tool_name, text, data, "structured_data")
+        parsed = self._coerce_structured(text)
+        if isinstance(parsed, (dict, list)):
+            return MCPToolResult(tool_name, text, parsed, "text_json")
+        return MCPToolResult(tool_name, text, None, "text_only")
+
+    async def call_mcp_tool_async(self, tool_name: str, **kwargs) -> str:
+        """异步调用MCP工具，返回字符串形式（结构化返回时为 JSON 文本）"""
+        return (await self.call_mcp_tool_result_async(tool_name, **kwargs)).text
+
+    @staticmethod
+    def _coerce_structured(text):
+        """MCP 返回 JSON 对象/数组文本时解析为 dict/list，否则原样返回文本。"""
+        if not isinstance(text, str):
+            return text
+        stripped = text.strip()
+        if stripped[:1] not in ("{", "["):
+            return text
+        try:
+            return json.loads(stripped)
+        except (ValueError, TypeError):
+            return text
+
+    def call_mcp_tool_result(self, tool_name: str, **kwargs) -> MCPToolResult:
+        """同步调用MCP工具并返回稳定结果封装"""
+        return asyncio.run(self.call_mcp_tool_result_async(tool_name, **kwargs))
+
+    def call_mcp_tool(self, tool_name: str, **kwargs) -> str:
+        """同步调用MCP工具，返回字符串形式"""
         return asyncio.run(self.call_mcp_tool_async(tool_name, **kwargs))
     
     # 定义一个通用的MCP工具类

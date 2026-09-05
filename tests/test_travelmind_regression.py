@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from sync.mcp_tools_adapter import MCPToolResult
 from sync.multi_agent.structured_planner import StructuredTravelPlanner
 from sync.travel_web_app import amap_static_marker_label
 
@@ -18,6 +19,12 @@ class FakeToolbox:
         if isinstance(response, Exception):
             raise response
         return response or ""
+
+    def call_text(self, tool_name: str, **kwargs) -> str:
+        return self.call(tool_name, **kwargs)
+
+    def call_structured(self, tool_name: str, **kwargs):
+        return MCPToolResult.from_value(tool_name, self.call(tool_name, **kwargs))
 
 
 class FakeHotelBrain:

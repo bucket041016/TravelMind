@@ -44,6 +44,8 @@ class TravelMindPhase0EvaluationTests(unittest.TestCase):
         self.assertGreater(by_name["dependency_fallback"]["metrics"]["fallback_rate"], 0.0)
         self.assertEqual(by_name["return_transfer_isolation"]["metrics"]["return_hotel_contamination_rate"], 0.0)
         self.assertEqual(report["aggregate"]["scenario_count"], 10)
+        self.assertEqual(report["aggregate"]["total_calls"], 141)
+        self.assertEqual(report["aggregate"]["total_tool_failures"], 4)
 
     def test_report_renderer_labels_phase2_suite_separately(self):
         report = {
