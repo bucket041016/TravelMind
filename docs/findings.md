@@ -194,6 +194,15 @@
 - 行为变化：`call` 恒返回 str；空白文本统一空结果文案；`pois/hotels["raw"]` 恒为 str；hotel `provider_status` 空值回退 provider 状态。
 - 验证：全量回归 112/112（37.6s）、评测 4/4（141 次调用/4 次 fixture 失败已固化为 `test_baseline_eval` 断言）、py_compile/`node --check`/`git diff --check` 通过。MCP Server 工具仍返回文本（供应商协议未改，按计划待混合来源证据后再切换）。
 
+## D2 candidate_contracts 生产接线（2026-09-05）
+
+- `run()` 在片区聚类后快照候选池，产出可选、版本化 `candidate_contracts`（`version`/`contract_version`/`source_mode` + POI 三组与酒店入选项）；位置选在 `_enrich_place_clusters` 之后，契约候选携带完整 `cluster_id/cluster_name/nearby_anchor`、`selection.score/reasons` 和 `source_meta`。
+- 契约对齐基线文档声明，新增 `source_mode=legacy_text_compatible`。
+- 取舍决策：落选原因暂不输出。现有构建器只收入选项，落选理由在 `_normalize_and_rank_*` 内部被 rank_candidates 丢弃；如 D3 需要展示落选理由，先扩展归一化函数保留 rejected 再接线，不在 D2 混入。
+- `_planning_brain_payload` 消费端确认无需改动：`pois/hotels` 内部的 `candidate_contracts` 键仍无人设置，payload 走排序后分组回退分支，与契约快照内容一致。
+- 新增 run() 级离线测试 `test_run_wires_candidate_contracts_and_keeps_legacy_fields`（本地 `_FakeRunToolbox` 文本 fixture + `_UnavailableBrain` 全规则降级）：断言版本化内容、cluster 字段、`selection/source_meta` 完整性，以及旧 `pois/hotels` 字段兼容和契约与旧字段入选项数量一致。
+- 验证：全量回归 113/113、评测 4/4（141/4 断言保持——构建器内部二重排序为确定性重算，不影响指标与调用次数）、py_compile/`node --check`/`git diff --check` 通过。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
@@ -201,7 +210,7 @@
 - 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞 Phase 3。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
-- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；`candidate_contracts` 仍未在 `run()` 接线（D2）。
+- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；同日 D2 完成并提交（`029ef20`）：`run()` 接线可选版本化 `candidate_contracts`（落选原因延后至 D3）。
 - 2026-08 收尾修复已推送到 main：v2 替代 v1 成为唯一前端入口、MCP 默认端口统一 8098、样式文件更名 styles.css；全量回归 61/61、评测 4/4 通过。
 - 当前评测仍暴露未解决问题：平均硬约束满足率 `0.7500`，低预算/多人预算没有反馈重规划，紧换乘场景仍需要全局路线门槛；预算偏差 `0.6230`（超预算酒店如实呈现，等待 Phase 3 替换/降级）。
 - Phase 2.5 已写入执行计划（`docs/implementation-plan.md`），前置条件包括 Phase 2.2 稳定 id/D12 协议边界、D11 准确观测和 D1 MCPToolAdapter 连接复用。
@@ -210,7 +219,7 @@
 
 1. 先读取本文件、[target-architecture.md](target-architecture.md)、`docs/implementation-plan.md` 的 Phase 2/2.5 与看板、`docs/project-baseline.md`。
 2. 先隔离结构化 MCP、`.dsh/` 和文档范围，完成 D12 的稳定结果封装、双访问方式、严格响应校验、真实 FastMCP 协议测试和三入口兼容；V3 已关闭，不再进入后续工作。
-3. 完成 D2，在 `/api/plan` 接线可选、版本化 `candidate_contracts`，并补旧字段兼容断言。
+3. [已完成 2026-09-05] D2，在 `/api/plan` 接线可选、版本化 `candidate_contracts`，并补旧字段兼容断言（提交 `029ef20`）。
 4. 完成 D11 的错误分类和准确降级 trace，再执行固定真实 DeepSeek 场景；随后补高德成功、Key 缺失、本地 fallback 和混合来源测试。
 5. 重跑全量回归、离线评测、Python/Node/diff、真实服务对照和主页面浏览器验收；关闭 Phase 2 后产品主线进入 Phase 3，Phase 2.5 保持可选实验支线。
 
