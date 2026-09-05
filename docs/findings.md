@@ -213,6 +213,39 @@
 - 边界声明：酒店价格估算与路线评审的脑降级仍在组件层消化（`cost_source`、`route_judgement` 来源已可观测），trace 五态聚焦规划脑与体检两个主脑步。
 - 验证：DeepSeek 契约测试 16/16（错误分类、重试计数、plan 层状态、跨字段校验）、trace 状态测试 5 个（`_record` 派生 + run() 级 `schema_failed`→`rule_fallback` 全链路断言）；全量回归 124/124、评测 4/4（141/4 断言保持）、py_compile/`node --check`/`git diff --check` 通过。真实固定 DeepSeek 场景基线归入 Phase 2 真实验收步（需真实 Key 与服务）。
 
+## Phase 2 真实验收记录（2026-09-05）
+
+执行环境：Windows + .venv，MCP Server `8098` + Web `8010`，真实高德 Web Key 与真实 DeepSeek Key；固定输入与原始响应存 `D:\Temp\travelmind-acceptance\`（临时目录，不入库）。共 3 次真实 `/api/plan` 规划。
+
+### 场景 A：真实高德 + 真实 DeepSeek（固定输入）
+
+广州→深圳，2026-09-12，2 天 1 人，预算 800，舒适档，兴趣经典景点/美食/地方特色，freeText「优先地铁附近，晚上不要安排太晚的活动」。耗时 49.1s，HTTP 200，响应 165KB。
+
+- `llm_status=used`、`planning_mode=deepseek_hybrid`；trace 状态：success×10、used×2。
+- **DeepSeek 五态真实基线：used=2（规划脑 + 体检各一次成功）、retry_success=0、schema_failed=0、call_failed=0、rule_fallback=0**——首次真实观测无格式失败，`response_format=json_object` 的收益仍待更多样本。
+- 高德真实数据：景点/美食/特色各 8 个候选全部 `is_real_place=true`；酒店 6 候选（provider_status=amap_fallback）；天气来自高德（雷阵雨 25~33°C）。
+- `candidate_contracts` 生产输出正确：travelmind-candidate-v1，8/8/8+6，候选带 `selection.score`（样例 62.2）、入选理由、`source_meta`、cluster 标注。
+- `quality_review` overall 72，5 issues，无返工；行程 2 天 9 items，7 项 real+map。
+
+### 场景 B：高德 Key 缺失降级（同一固定输入）
+
+MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时 27.5s，响应 165KB→66KB。
+
+- 天气降级 wttr.in（英文摘要）；POI 降级本地知识库（5 景点 + 7 美食），全部 `is_real_place=false`/`is_suggestion=true`/无坐标——**真实地点护栏在降级态守住**：`candidate_contracts` 景点/美食输出 0，不放行不可定位项。
+- 酒店 `provider_status=not_configured`，3 个名称带「（示例）」的区域候选进入 contracts（观察项 3）。
+- DeepSeek 仍真实 `used`×2；`quality_review` overall 65（较健康态 72 下降，合理）。trace 无 error——降级发生在供应商层，通过 `provider_status`/`source_meta` 表达而非 trace 错误。
+
+### 场景 C：浏览器主流程（桌面）
+
+默认表单（广州→深圳，2026-09-06）点击 Plan My Trip，真实规划一次。结果页完整渲染：「DEEPSEEK 智能规划 + 高德事实校验」标识、路线对比（高铁/自驾真实数据）、真实 POI 照片与评分、跨天真实交通接驳（步行 21 分钟 1.6km、高德票价参考）、「DeepSeek 已从高德候选中绑定真实地点」标记、返程住宿隔离说明、精选推荐带「高德参考」来源标签、预算 ¥662 预算内。**浏览器控制台 0 错误**。截图：`D:\Temp\travelmind-acceptance\browser_main_flow.png`。
+
+### 未覆盖与观察项
+
+- 移动端视口未测（遗留项：Phase 5 Playwright 或单独一轮移动视口检查）；高德限流路径未主动触发（CUQPS 退避已有离线覆盖）。
+- 观察项 1：降级态本地 POI 的 `source` 标签仍为 `amap_poi`（normalize 默认值），建议记为小债务改为 `knowledge_base`。
+- 观察项 2：真实 DeepSeek 体检路径下 `quality_review.constraints=0`（约束逐项评审只在规则体检路径产出）——与 Phase 1 规则路径行为不一致，建议随 Phase 3/追问改造统一。
+- 观察项 3：本地 fallback 酒店「示例」区域候选进入 contracts——名称显式标注示例、非编造真实酒店，可接受；如需更严可在构建器过滤 `not_configured` 酒店。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态

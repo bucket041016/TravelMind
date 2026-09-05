@@ -13,8 +13,8 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 ## 2. 当前仓库状态
 
-- 分支：`main`，相对 `origin/main` 领先 8 个本地提交
-- HEAD：docs 同步提交；其前三个为 `05def10`（`feat: classify DeepSeek degradation and trace states`，2026-09-05 D11）、`029ef20`（`feat: wire candidate_contracts into plan response`，2026-09-05 D2）和 `dfb5a5b`（`feat: support structured MCP results with text fallback`，2026-09-05 D12）
+- 分支：`main`（本地 feat/docs 提交成对推进；远端同步状态以 `git status` 为准，2026-09-05 已推送至 `64c33f9`）
+- 近期关键提交：`05def10`（D11 降级观测）、`029ef20`（D2 契约接线）、`dfb5a5b`（D12 稳定封装），均为 2026-09-05；其后叠加验收记录文档提交
 - 认知与执行文档现位于 `docs/`（2026-08-04 整理后），根目录同名文件为历史留档。
 - 工作区仅剩 `.dsh/` 本地技能资产未跟踪（保持在产品提交之外）。V3 已于 2026-08-24 按废案删除；结构化 MCP 原型已按 D12 完成并提交（2026-09-05）。
 
@@ -198,15 +198,17 @@ pip check：通过
 git diff --check：通过
 ```
 
-本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `124/124` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定；真实 HTTP MCP、高德、DeepSeek 与浏览器端到端仍未验证。
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `124/124` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
+
+2026-09-05 真实验收补充（详见 findings.md 验收记录）：真实高德成功场景 24 个真实 POI + 契约输出正确（quality 72）；Key 缺失降级场景真实地点护栏守住、`candidate_contracts` 不放行不可定位项（quality 65）；DeepSeek 五态真实基线 used=2/其余 0（3 次真实规划）；桌面浏览器主流程完整渲染且控制台 0 错误。移动端视口遗留 Phase 5。
 
 ## 10. 后续开发的优先关注点
 
 1. [已完成 2026-09-05] 范围隔离与 D12 已按闸门提交（`dfb5a5b feat: support structured MCP results with text fallback`）；`.dsh/` 继续留在产品提交之外。
 2. [已完成 2026-09-05] D12：稳定 MCP 结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容。
 3. [已完成 2026-09-05] D2：`/api/plan` 已输出可选、版本化 `candidate_contracts`（提交 `029ef20`），旧 `pois`/`hotels` 保留；D3 前端来源/落选展示在此之后进行。
-4. [代码已完成 2026-09-05] D11 错误分类和降级观测已落地（提交 `05def10`）；剩余为高德成功、Key 缺失、fallback、混合来源测试和固定 DeepSeek 真实场景基线（随 Phase 2 真实验收步执行），离线与真实证据都通过后关闭 Phase 2。
-5. 产品主线随后进入 Phase 3 的预算反馈与全局质量门；Phase 2.5 保持可选实验。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛。
+4. [已完成 2026-09-05] D11 错误分类和降级观测已落地（提交 `05def10`）；真实验收已执行——真实高德成功/Key 缺失降级、DeepSeek 五态基线（used=2/其余 0）、桌面浏览器主流程 0 控制台错误；移动端视口遗留 Phase 5。Phase 2 离线与真实证据齐备，具备关闭条件。
+5. 产品主线具备进入 Phase 3（预算反馈与全局质量门）的条件；Phase 2.5 保持可选实验。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；新观察项见 findings.md 验收记录（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约）。
 
 ## 11. 维护入口速查
 
