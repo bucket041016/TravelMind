@@ -13,8 +13,8 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 ## 2. 当前仓库状态
 
-- 分支：`main`，相对 `origin/main` 领先 6 个本地提交
-- HEAD：docs 同步提交；其前两个为 `029ef20`（`feat: wire candidate_contracts into plan response`，2026-09-05 D2）和 `dfb5a5b`（`feat: support structured MCP results with text fallback`，2026-09-05 D12）
+- 分支：`main`，相对 `origin/main` 领先 8 个本地提交
+- HEAD：docs 同步提交；其前三个为 `05def10`（`feat: classify DeepSeek degradation and trace states`，2026-09-05 D11）、`029ef20`（`feat: wire candidate_contracts into plan response`，2026-09-05 D2）和 `dfb5a5b`（`feat: support structured MCP results with text fallback`，2026-09-05 D12）
 - 认知与执行文档现位于 `docs/`（2026-08-04 整理后），根目录同名文件为历史留档。
 - 工作区仅剩 `.dsh/` 本地技能资产未跟踪（保持在产品提交之外）。V3 已于 2026-08-24 按废案删除；结构化 MCP 原型已按 D12 完成并提交（2026-09-05）。
 
@@ -109,6 +109,8 @@ flowchart LR
 
 `constraintSummary` 按 `hard`、`soft`、`unknown` 分组；每项保留 `id`、`kind`、`text`、`source`。质量评审逐项给出 `satisfied`、`violated` 或 `unknown`，并附 `evidence`。
 
+`llm_status` 为结果语义（`used`/`unavailable`/`schema_failed`/`call_failed`，成功含重试后成功恒为 `used`）；降级细节（`error_kind`/`attempt_count`/`fallback_reason`）与五态 trace（`used/retry_success/schema_failed/call_failed/rule_fallback`）随 `trace` 字段返回（2026-09-05，D11）。
+
 `candidate_contracts` 计划版本为 `travelmind-candidate-v1`，来源模式为 `legacy_text_compatible`；包含 POI/酒店入选候选及其 `selection.score/reasons` 评分理由、`source_meta` 来源元数据和 `cluster` 片区标注（2026-09-05 已在 `run()` 接线产出）；过滤落选原因暂不输出，D3 做前端来源/落选展示时再定结构。MCP Server 的供应商返回仍是旧文本。
 
 每日 item 重点字段：`title`、`location`、`address`、`category`、`is_real_place`、`place_source`、`location_point`、`map_included`、`cost_estimate`、`cost_source`、`arrival_transport_segment`。
@@ -186,23 +188,24 @@ Phase 1 专项测试：5/5 通过
 Phase 2 Contract/集成测试：7/7 通过
 Phase E 约束链路测试：22/22 通过
 D12 协议级测试（tests/test_mcp_protocol.py）：11/11 通过
-D2 契约接线测试（tests/test_phase2_contracts.py）：8/8 通过
+D2/D11 规划器契约与 trace 测试（tests/test_phase2_contracts.py）：13/13 通过
+D11 DeepSeek 契约测试（tests/test_deepseek_contracts.py）：16/16 通过
 Phase 0 评测：4/4 通过；Phase 1/Phase 2 评测均为 10 个场景，Phase 2 硬约束满足率 0.7500
 评测确定性断言：141 次调用/4 次 fixture 失败（已固化进 test_baseline_eval）
-python -m unittest discover -s tests -q：113 个通过，47.074 秒（当前工作树）
-合计测试：113/113 通过
+python -m unittest discover -s tests -q：124 个通过，62.956 秒（当前工作树）
+合计测试：124/124 通过
 pip check：通过
 git diff --check：通过
 ```
 
-本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `113/113` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定；真实 HTTP MCP、高德、DeepSeek 与浏览器端到端仍未验证。
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `124/124` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定；真实 HTTP MCP、高德、DeepSeek 与浏览器端到端仍未验证。
 
 ## 10. 后续开发的优先关注点
 
 1. [已完成 2026-09-05] 范围隔离与 D12 已按闸门提交（`dfb5a5b feat: support structured MCP results with text fallback`）；`.dsh/` 继续留在产品提交之外。
 2. [已完成 2026-09-05] D12：稳定 MCP 结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容。
 3. [已完成 2026-09-05] D2：`/api/plan` 已输出可选、版本化 `candidate_contracts`（提交 `029ef20`），旧 `pois`/`hotels` 保留；D3 前端来源/落选展示在此之后进行。
-4. 完成 D11 的错误分类和降级观测，再补高德成功、Key 缺失、fallback、混合来源和固定 DeepSeek 真实场景；离线与真实证据都通过后关闭 Phase 2。
+4. [代码已完成 2026-09-05] D11 错误分类和降级观测已落地（提交 `05def10`）；剩余为高德成功、Key 缺失、fallback、混合来源测试和固定 DeepSeek 真实场景基线（随 Phase 2 真实验收步执行），离线与真实证据都通过后关闭 Phase 2。
 5. 产品主线随后进入 Phase 3 的预算反馈与全局质量门；Phase 2.5 保持可选实验。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛。
 
 ## 11. 维护入口速查

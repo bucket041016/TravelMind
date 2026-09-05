@@ -203,6 +203,16 @@
 - 新增 run() 级离线测试 `test_run_wires_candidate_contracts_and_keeps_legacy_fields`（本地 `_FakeRunToolbox` 文本 fixture + `_UnavailableBrain` 全规则降级）：断言版本化内容、cluster 字段、`selection/source_meta` 完整性，以及旧 `pois/hotels` 字段兼容和契约与旧字段入选项数量一致。
 - 验证：全量回归 113/113、评测 4/4（141/4 断言保持——构建器内部二重排序为确定性重算，不影响指标与调用次数）、py_compile/`node --check`/`git diff --check` 通过。
 
+## D11 DeepSeek 降级观测（2026-09-05）
+
+- `_invoke_parsed` 改为返回 `(parsed, attempt_count)`，重试预算耗尽抛 `DeepSeekInvocationError`（`error_kind`: schema=输出无法解析/校验、call=网络/鉴权/超时；附 `attempt_count`）；调用错误与输出质量错误分类统计，不再混为一个 `parse_failed`。
+- 四类脑调用（plan/estimate_hotel_prices/judge_route/review_itinerary）失败状态细化为 `schema_failed`/`call_failed`，并统一携带 `error_kind`/`attempt_count`/`fallback_reason`（如 `deepseek_schema_failed`）；`unavailable`（无 Key）也带同一组元数据（attempt_count=0）。
+- 关键取舍：`llm_status` 保持结果语义——成功恒为 `used`（含重试后成功），`retry_success` 只在 trace 层由 `attempt_count>1` 派生；这样四个 `!= "used"` 消费方（hotel_service/local_transport_service/quality_reviewer/itinerary_builder）零改动，不会把重试成功误判为失败。
+- `_record` 对携带 `llm_status` 的业务结果把 trace 状态从普通 `success` 细化为 `used/retry_success/schema_failed/call_failed/unavailable`；规则降级行程步显式记录 `rule_fallback`（Phase 2.5 铁律 5 的五态齐备）。普通结果与 `status_hint` 语义不变。
+- `ReviewOutput` 跨字段校验：`needs_repair=true` 必须携带 `repaired_plan`，缺失即触发回喂重试；行程可用项不足的物化失败改记 `schema_failed` + `fallback_reason=itinerary_insufficient_items`。
+- 边界声明：酒店价格估算与路线评审的脑降级仍在组件层消化（`cost_source`、`route_judgement` 来源已可观测），trace 五态聚焦规划脑与体检两个主脑步。
+- 验证：DeepSeek 契约测试 16/16（错误分类、重试计数、plan 层状态、跨字段校验）、trace 状态测试 5 个（`_record` 派生 + run() 级 `schema_failed`→`rule_fallback` 全链路断言）；全量回归 124/124、评测 4/4（141/4 断言保持）、py_compile/`node --check`/`git diff --check` 通过。真实固定 DeepSeek 场景基线归入 Phase 2 真实验收步（需真实 Key 与服务）。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
@@ -210,7 +220,7 @@
 - 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞 Phase 3。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
-- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；同日 D2 完成并提交（`029ef20`）：`run()` 接线可选版本化 `candidate_contracts`（落选原因延后至 D3）。
+- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；同日 D2 完成并提交（`029ef20`）：`run()` 接线可选版本化 `candidate_contracts`（落选原因延后至 D3）；同日 D11 代码完成并提交（`05def10`）：DeepSeek 错误分类、attempt_count、fallback_reason 与 trace 五态（真实固定场景基线随真实验收步执行）。Phase 2 剩余闸门：高德成功/限流/Key 缺失/混合来源测试与真实服务对照、浏览器主流程验收。
 - 2026-08 收尾修复已推送到 main：v2 替代 v1 成为唯一前端入口、MCP 默认端口统一 8098、样式文件更名 styles.css；全量回归 61/61、评测 4/4 通过。
 - 当前评测仍暴露未解决问题：平均硬约束满足率 `0.7500`，低预算/多人预算没有反馈重规划，紧换乘场景仍需要全局路线门槛；预算偏差 `0.6230`（超预算酒店如实呈现，等待 Phase 3 替换/降级）。
 - Phase 2.5 已写入执行计划（`docs/implementation-plan.md`），前置条件包括 Phase 2.2 稳定 id/D12 协议边界、D11 准确观测和 D1 MCPToolAdapter 连接复用。
@@ -220,7 +230,7 @@
 1. 先读取本文件、[target-architecture.md](target-architecture.md)、`docs/implementation-plan.md` 的 Phase 2/2.5 与看板、`docs/project-baseline.md`。
 2. 先隔离结构化 MCP、`.dsh/` 和文档范围，完成 D12 的稳定结果封装、双访问方式、严格响应校验、真实 FastMCP 协议测试和三入口兼容；V3 已关闭，不再进入后续工作。
 3. [已完成 2026-09-05] D2，在 `/api/plan` 接线可选、版本化 `candidate_contracts`，并补旧字段兼容断言（提交 `029ef20`）。
-4. 完成 D11 的错误分类和准确降级 trace，再执行固定真实 DeepSeek 场景；随后补高德成功、Key 缺失、本地 fallback 和混合来源测试。
+4. [代码已完成 2026-09-05] D11，错误分类和准确降级 trace 已落地（提交 `05def10`）；固定真实 DeepSeek 场景基线随真实验收步执行。
 5. 重跑全量回归、离线评测、Python/Node/diff、真实服务对照和主页面浏览器验收；关闭 Phase 2 后产品主线进入 Phase 3，Phase 2.5 保持可选实验支线。
 
 ### 建议排除出日常上下文的材料

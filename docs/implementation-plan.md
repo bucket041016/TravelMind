@@ -254,7 +254,8 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - 独立报告：`tests/evals/phase2_report.json`、`tests/evals/phase2_report.md`。与 Phase 1 相比，路线超容忍率由 `0.0750` 降至 `0.0500`，预算偏差由 `0.6217` 降至 `0.6191`，fallback 率由 `0.0833` 升至 `0.1000`。
 - 2026-09-05 D12 完成并提交（`dfb5a5b`）：适配器新增 `MCPToolResult`（`tool_name`/`text`/`data`/`source`/`validation_error`）与 `call_mcp_tool_result(_async)`，`call_mcp_tool(_async)` 恒返回字符串；`MCPToolbox` 提供 `call_text()`/`call_structured()`，`call()` 保留为文本别名，旧 6 个 Agent 文件零改动；规划器 5 个调用点显式化（POI/酒店走 `call_structured` + Pydantic 解析，天气/跨城/市内走 `call_text`）；`structured_result.py` 重写为响应模型层（`PlaceCandidate`/`POIResponse`/`HotelResponse` + `parse_poi_response`/`parse_hotel_response`，坏元素过滤并回填 `validation_error`，删除 `is_structured_*`/`as_list`）；适配器构造参数接受 FastMCP 实例支持内存直连。结构化数据只读 FastMCP 解包后的 `result.data`，不读线协议 `structured_content`（3.4.0 非 object 返回被 `{"result": ...}` 包裹的 wrap 陷阱）。新增 `tests/test_mcp_protocol.py` 11 个用例（dict/无注解 str/wrap 陷阱/JSON 文本兜底/空文本/异常/非法 schema + 三入口回归，其中旧链路 dict 返回用例直接覆盖 2026-08-24 复现的 Writer 崩溃）。全量回归 112/112，评测 4/4（141 次调用/4 次 fixture 失败已固化为 `test_baseline_eval` 断言）。
 - 2026-09-05 D2 完成并提交（`029ef20`）：`run()` 在片区聚类后快照候选池产出可选、版本化 `candidate_contracts`（`version`/`contract_version`/`source_mode` + POI/酒店入选项，候选携带 `selection.score/reasons`、`source_meta`、cluster 标注）；契约对齐文档声明新增 `source_mode=legacy_text_compatible`；取舍决策——落选原因暂不输出（现有构建器只收入选项，落选理由在 rank_candidates 被丢弃，需要时先扩展 `_normalize_and_rank_*` 再接 D3 展示）。新增 run() 级离线测试 `test_run_wires_candidate_contracts_and_keeps_legacy_fields`：断言版本化内容、cluster 字段和旧 `pois`/`hotels` 兼容。全量回归 113/113，评测 4/4（141/4 断言保持，二重排序不影响指标与调用次数）。
-- 当前未宣告 Phase 2 完成；下一小步按修订顺序完成 D11，再做混合来源/真实验收，不降低真实地点与坐标护栏来换取表面 fallback 指标。
+- 2026-09-05 D11 完成并提交（`05def10`）：`_invoke_parsed` 返回 `(parsed, attempt_count)`，重试预算耗尽抛 `DeepSeekInvocationError`（`error_kind` 区分 schema/call）；四类脑调用的失败状态从笼统 `parse_failed` 细化为 `schema_failed`（输出无法解析/校验，含行程可用项不足）与 `call_failed`（网络/鉴权/超时），统一携带 `error_kind`/`attempt_count`/`fallback_reason`；`llm_status` 保持结果语义（成功恒为 `used`，四个 `!= "used"` 消费方零改动），trace 由 `_record` 从 `attempt_count>1` 派生 `retry_success`；规则降级行程步显式记录 `rule_fallback`；`ReviewOutput` 增加跨字段校验（`needs_repair=true` 必须带 `repaired_plan`）。设计取舍：酒店价格估算与路线评审的脑降级仍在组件层消化（`cost_source`/`route_judgement` 已可观测），trace 细化聚焦规划脑与体检两个主脑步。离线新增 16 个 DeepSeek 契约测试与 5 个 trace 状态测试；全量回归 124/124，评测 4/4（141/4 断言保持）。真实固定 DeepSeek 场景基线（`used/retry_success/schema_failed/call_failed/rule_fallback` 计数）归入 Phase 2 真实验收步执行。
+- 当前未宣告 Phase 2 完成；剩余闸门为高德成功/限流/Key 缺失/本地 fallback 与混合来源测试、真实服务对照和浏览器主流程验收，不降低真实地点与坐标护栏来换取表面 fallback 指标。
 
 ### 2026-08-14 agentic 预验证证据（决定 Phase 2.5 形态）
 
@@ -467,7 +468,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 | D8 | staticmethod 兼容层 | `structured_planner.py` 约 150 行桥接（Phase E 遗留） | 测试全部改纯函数调用后移除桥接 | 低 | — | 未开始 |
 | D9 | 仅测试使用的函数 | `normalize_route_fact`、`validate_place_candidate` 生产链路未使用 | 明确接入或移除，避免误导读者 | 低 | — | 未开始 |
 | D10 | 小项合集 | CORS `allow_origins=*`+`allow_credentials=True` 无效组合；`max_tokens=3500` 多日行程截断风险；`write_itinerary_file` 文件名边界；Windows 日志 GBK 编码 | 逐项顺手修 | 低 | — | 未开始 |
-| D11 | DeepSeek 降级不可准确统计 | `parse_failed` 作为普通返回进入 `_record`，外层 trace 仍可能记 `success`；现有日志没有保存真实模型状态和重试次数 | 增加 `error_kind`、`attempt_count`、`fallback_reason` 和降级状态；用固定真实场景建立基线 | 高 | Phase 2 收尾；Phase 2.5 前提 | 未开始 |
+| D11 | DeepSeek 降级不可准确统计 | `parse_failed` 作为普通返回进入 `_record`，外层 trace 仍可能记 `success`；现有日志没有保存真实模型状态和重试次数 | 增加 `error_kind`、`attempt_count`、`fallback_reason` 和降级状态；用固定真实场景建立基线 | 高 | Phase 2 收尾；Phase 2.5 前提 | 已完成（2026-09-05，`05def10`：schema/call 错误分类 + attempt_count + fallback_reason + trace 五态 + 跨字段校验；真实固定场景基线归入 Phase 2 真实验收步） |
 | D12 | 结构化 MCP 跨入口兼容 | `MCPToolbox.call` 开始透传 `dict/list`；旧 Writer/天气/路线/预算 Agent 仍按字符串拼接、`join`、`startswith` 或正则处理。当前适配器只读 `content[0].text`，结构化判定只要求命中任一字段，候选列表也未逐项校验 | 在适配器边界建立稳定结果封装（至少含 `text`、`data`、`source`、`validation_error`）；保留字符串兼容的 `call_text()`，规划器通过 `call_structured()` 显式取数据；优先读取 FastMCP `structured_content/data`，JSON 文本解析只作兜底；POI/酒店用 Pydantic 严格校验并过滤坏元素；覆盖实际 FastMCP 结果形态和三入口 | 高 | Phase 2.2 收尾 | 已完成（2026-09-05，`dfb5a5b`） |
 | D13 | V3 静态原型暴露为路由 | `/v3` 原型只切换固定 DOM，没有请求 `/api/plan`，继续保留会制造产品能力误解和维护分支 | 关闭该方向，删除 `/v3` 路由及 `web/v3_*` 文件；保留本条作为决策记录 | 已关闭 | 前端废案 | 2026-08-24 已删除 |
 
@@ -502,7 +503,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [completed] 新增 `deepseek_contracts.py` 与 DeepSeek 输出 Pydantic 校验 + 回喂重试（2026-08-17）：四类输出在边界用 `model_validate_json` 校验并做类型归一化。该项按预防性加固管理，真实 `/api/plan` 格式失败次数仍未知
 - [in_progress] 后端稳定 id 第一版（2026-08-17）：`stable_place_id()` 已用「名字+坐标」替代位置序号；仍需定义 provider POI id 优先、无坐标同名冲突和 `id_version`
 - [in_progress] 结构化 MCP 返回准备（2026-08-17）：字段名、规划器侧消费和原始透传原型已实现；真实 MCP Server 仍返回文本，旧入口 dict/list 兼容已发现风险，需改成稳定结果封装后才达到全链路完成
-- [pending] D11：补 DeepSeek 真实固定场景与 `used/retry_success/schema_failed/call_failed/rule_fallback` 观测，修正降级仍记 `success` 的 trace
+- [completed] D11（2026-09-05）：DeepSeek 错误分类与准确降级 trace 已落地（`05def10`）；真实固定场景基线随 Phase 2 真实验收步执行
 - [completed] D12（2026-09-05）：建立稳定结果封装和 `call_text`/`call_structured` 双访问，改用 FastMCP 解包后的 `data` + Pydantic 响应校验，并完成真实协议形态与三入口兼容测试
 - [completed] D2（2026-09-05）：在 `run()` 接线 `candidate_contracts` 并增加响应断言；D3 前端来源/排序展示成为下一可选清理项
 - [in_progress] 覆盖高德成功、限流/Key 缺失、本地 fallback 和混合来源，并比较 Phase 2 指标
@@ -516,7 +517,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 | 0 | 隔离范围 | 确认三个本地提交的目标分支；结构化 MCP、`.dsh/`、文档分别处理，V3 废案已经从工作树删除 | 当前 `main` 领先远端 3 个提交且仍混有产品代码、辅助资产和文档，继续叠加会让回滚和评审失真 | 每组可独立测试、回滚和决定是否发布 | 多一次分支/提交管理 |
 | 1 | 完成 D12（已完成 2026-09-05，`dfb5a5b`） | 稳定 MCP 结果封装；`call_text`/`call_structured` 双访问；POI/酒店响应模型；坏元素过滤；真实 FastMCP 协议级测试；三入口兼容测试 | 当前 diff 已改变公共返回类型，属于正在发生的合并风险 | 以后增加结构化工具时边界统一，旧链路不被迫同时重写 | 比直接返回 `dict` 多一个薄适配层和少量模型代码 |
 | 2 | 完成 D2（已完成 2026-09-05，`029ef20`） | `run()` 构建并返回可选、版本化 `candidate_contracts`；补 `/api/plan` 响应断言和旧字段兼容测试 | D3 前端来源展示和候选可解释性都依赖真实生产输出 | 小改动即可打通已有构建/消费代码，前后端契约可验证 | 响应体增大；需要明确只输出入选项还是同时输出落选原因 |
-| 3 | 完成 D11 | DeepSeek 返回 `error_kind`、`attempt_count`、`fallback_reason`、最终状态；trace 区分 `used/retry_success/schema_failed/call_failed/rule_fallback` | 没有准确观测就不能解释真实服务对照结果 | 能区分模型格式、网络、鉴权、限流和规则降级 | trace 契约会增加字段，需保持前端容忍未知字段 |
+| 3 | 完成 D11（代码已完成 2026-09-05，`05def10`） | DeepSeek 返回 `error_kind`、`attempt_count`、`fallback_reason`、最终状态；trace 区分 `used/retry_success/schema_failed/call_failed/rule_fallback` | 没有准确观测就不能解释真实服务对照结果 | 能区分模型格式、网络、鉴权、限流和规则降级 | trace 契约会增加字段，需保持前端容忍未知字段 |
 | 4 | Phase 2 验收 | 离线全量/评测、真实高德成功与降级、固定 DeepSeek 场景、桌面/移动浏览器主流程；记录执行与证据来源 | 单元测试通过只证明受控路径，不能代表外部协议和用户流程 | 关闭 Phase 2 的判断有产品证据，不再靠代码存在性 | 真实调用有波动和成本，需固定输入并保留时间戳 |
 | 5 | 转入 Phase 3 | 先做预算反馈循环和全局路线门；Phase 2.5 保持可选支线 | 当前评测的主要产品差距是预算偏差和全局路线质量，不是增加更多 agentic 自主性 | 直接改善用户方案质量，范围与指标清楚 | 暂缓工具增强规划脑的探索速度 |
 
@@ -636,7 +637,7 @@ git diff --check
 1. 先按“提交拆分与合并闸门”确认三个本地提交的目标分支，并隔离结构化 MCP、`.dsh/` 和文档；不在混合工作树上继续加业务功能。V3 已关闭，不再占用后续步骤。
 2. [已完成 2026-09-05] D12：稳定 MCP 结果封装与 `call_text`/`call_structured` 双访问、Pydantic POI/酒店校验、坏元素隔离、内存协议级测试与三入口兼容（提交 `dfb5a5b`）。
 3. [已完成 2026-09-05] D2：在 `run()` 接线并输出可选、版本化 `candidate_contracts`（含 `source_mode=legacy_text_compatible`），run() 级响应与旧字段兼容断言已落地（提交 `029ef20`）；落选原因暂不输出，D3 做前端来源/落选展示时再定结构。
-4. 完成 D11：补跨字段校验和错误分类，修正降级 trace；用固定真实 DeepSeek 场景建立 `used/retry_success/schema_failed/call_failed/rule_fallback` 基线，再判断 `response_format=json_object` 的收益。
+4. [代码已完成 2026-09-05] D11：`error_kind`/`attempt_count`/`fallback_reason` 与 trace 五态已落地（提交 `05def10`）；用固定真实 DeepSeek 场景建立 `used/retry_success/schema_failed/call_failed/rule_fallback` 基线，随 Phase 2 真实验收步执行，再判断 `response_format=json_object` 的收益。
 5. 补高德成功、Key 缺失、本地 fallback 和混合来源测试，重跑全量回归、离线评测、真实服务对照和主页面 Playwright 检查，满足全部闸门后关闭 Phase 2。
 6. 产品主线进入 Phase 3，处理预算偏差、低预算/多人预算硬约束和全局路线质量；Phase 2.5 保持可选实验支线，完成 D1/D11/D12 前置后再按天气 → POI/酒店 → 路线三步灰度。
 7. Phase 4 结构化追问、Phase 5 持久化/真实进度按序推进。
