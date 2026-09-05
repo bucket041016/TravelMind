@@ -208,6 +208,8 @@ class StructuredTravelPlanner:
         hotels = self._record(trace, "HotelAgent 住宿匹配", prefs, lambda: self._build_hotels(prefs))
         _normalize_and_rank_hotels(hotels, prefs)
         self._enrich_place_clusters(pois, hotels)
+        # 片区聚类后快照候选池，保证契约携带 cluster/selection/source_meta 完整字段。
+        candidate_contracts = self._build_candidate_contracts(prefs, pois, hotels, weather)
         local_transport = self._record(trace, "LocalMobilityAgent 目的地内交通", prefs, lambda: self._build_local_transport(prefs, routes, hotels))
         llm_plan = self._record(
             trace,
@@ -286,6 +288,7 @@ class StructuredTravelPlanner:
             "weather_advice": weather_advice,
             "map": map_data,
             "pois": pois,
+            "candidate_contracts": candidate_contracts,
             "budget": budget,
             "itinerary_days": itinerary_days,
             "quality_review": quality_review,
@@ -430,6 +433,7 @@ class StructuredTravelPlanner:
         return {
             "version": "travelmind-candidate-v1",
             "contract_version": "travelmind-candidate-v1",
+            "source_mode": "legacy_text_compatible",
             "pois": {
                 "attractions": attractions,
                 "foods": foods,
