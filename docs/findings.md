@@ -34,7 +34,7 @@
 - 同步 MCP Server 暴露 `get_current_time`、`get_weather`、`amap_geocode`、`amap_plan_routes`、`plan_route`、`search_poi`、`search_hotels`、`estimate_budget`、`write_itinerary_file`。
 - 高德请求集中经过缓存、最小间隔和 QPS 重试逻辑；天气优先高德，随后使用 `wttr.in`，两者失败时返回说明性文本。
 - POI/酒店在高德 Key 缺失或请求失败时降级到本地知识/规则；航班、铁路、酒店供应商目前只有占位适配器，不展示实时班次、库存或可预订价格。
-- MCP Server 的代码默认端口仍是 `8083`，仓库文档和 `.env.example` 约定演示端口是 `8098`；正式启动依赖 `MCP_PORT=8098` 环境变量。
+- 当前产品 Web 与同步 MCP Server 默认端口已统一为 `8098`，路径为 `/my-custom-path`；`8083` 只残留在遗留 LCEL Agent 和适配器命令行示例，运行时仍建议显式设置 `MCP_SERVER_URL` 避免环境漂移。
 - `MCPToolAdapter` 的同步 API 通过 `asyncio.run` 包装异步 FastMCP Client；当前同步 Web 规划器由 FastAPI 同步 endpoint 驱动，外部调用在请求线程内完成。
 
 ## 前端现状
@@ -124,25 +124,95 @@
 
 结论与铁律：agentic 补查可行且有真实价值，但必须"**后端回填 id + 强 schema 校验 + 只读白名单**"为前提——模型永不生成 id，只能引用后端 `normalize_place_candidates` 给出的 id；补查候选回传后端重新 normalize。据此新增 Phase 2.5（工具增强规划脑），并把 Phase 2.2 升级为"稳定 id 事实层"。
 
+## DeepSeek 输出结构化校验（2026-08-17）
+
+- 新增 `sync/multi_agent/deepseek_contracts.py`：用 Pydantic v2 为 DeepSeek 四类输出建立契约（`PlanOutput` / `HotelPriceOutput` / `RouteJudgement` / `ReviewOutput` 及其嵌套模型），`extra="ignore"`；枚举类字段（`category`/`decision`/`price_confidence` 等）保持 `str` 交由下游 normalizer 统一兜底，避免在边界过度拒绝导致 fallback 率上升。
+- `deepseek_brain.py` 四个方法统一走新增的 `_invoke_parsed`：`model_validate_json` 校验 + 类型归一化 + 校验失败回喂错误重试（最多 2 次），替代原 `_parse_json_object` 只做 `json.loads` 的单次解析。
+- 类型强转顺带修复了一个潜在 bug：原下游 `bool(raw_item.get("is_suggestion"))` 会把字符串 `"false"` 误判为 `True`；现在边界已把 `"false"` 归一到 `False`。
+- `repaired_plan` 改为可选（`PlanOutput | None`），避免 `needs_repair=false` 且缺 `repaired_plan` 时整份 review 被误判校验失败。
+- 验证：新增 `tests/test_deepseek_contracts.py` 9 个用例（围栏清理、前言后记剥离、类型强转、缺失字段拒绝、回喂重试与重试耗尽），全量回归 70/70、离线评测 4/4、py_compile 与 `git diff --check` 通过。
+- 未做：`response_format={"type":"json_object"}`（计划 2.8）仍待接入，需真实 DeepSeek API 验证；当前围栏清理仍保留作为兜底。
+
+## 后端稳定 id 回填（2026-08-17）
+
+- 新增 `contracts.stable_place_id()`：以「名字+坐标」生成确定性 id（坐标是地点的全局唯一身份），模型只引用、永不生成，后端可用名字/坐标回溯重算完成回填匹配。
+- `text_parser._parse_numbered_section` 弃用 `_make_item_id(heading, index, name)` 的位置序号 id（序号随列表顺序变化、不可回溯），改为 `stable_place_id(name, location)`。
+- `normalize_place_candidate` 统一附加 `stable_id` 并在 id 缺失时回填；显式传入的 id（fixture / 未来结构化 MCP）仍保留，保持旧接口兼容。
+- 过程中发现并修复一个前置顺序问题：`_build_hotels` 在 normalize 之前就用 `item.get("id")` 请求 AI 估价，若 id 推迟到 normalize 才生成会导致估价请求落空；最终把稳定 id 生成前置到 `_parse_numbered_section`，保证 id 全程可用。
+- 验证：新增 `tests/test_stable_id.py` 6 个用例（确定性、坐标区分、无坐标兜底、normalize 回填/保留、编号段解析），全量回归 76/76、离线评测 4/4、py_compile 与 `git diff --check` 通过。
+
+## 旧 /api/multi-agent-chat 链路冒烟测试（2026-08-17）
+
+- 为工程债务 D4 的第一步补冒烟测试：新增 `tests/test_multi_agent_chat_smoke.py` 4 个用例，用离线 Fake 工具箱覆盖 `PreferenceAgent` 正则解析与 `MultiAgentTravelPlanner.run()` 端到端。
+- 确认旧链路事实 Agent（天气/路线/POI/预算）与 Writer 均只依赖 MCP 工具、不依赖 DeepSeek，因此可纯离线冒烟。
+- 测试锁定并暴露了 preference_agent 正则的当前支持范围：「两人/2人」可解析，「两个人/两个孩子」不识别（`\s*人` 无法跨越「个」）。这属已知限制，待 D4 退役决策时一并决定是否用 LLM + Pydantic 抽取替代正则。
+- 验证：全量回归 80/80、离线评测 4/4、py_compile 与 `git diff --check` 通过。
+
+## 结构化 MCP 返回契约（2026-08-17）
+
+- 新增 `sync/multi_agent/structured_result.py`：冻结 POI（attractions/foods/specialty_places/generic_foods）与酒店（candidates/area_recommendation/provider_status）字段命名，及 `is_structured_poi`/`is_structured_hotel`/`as_list` 判定与安全归一化。
+- `poi_service._build_pois` 与 `hotel_service._build_hotels` 在收到结构化 dict 时直接消费、否则回退文本正则；正则逐步降级为兜底，不改变旧文本路径行为。
+- 全链路结构化返回仍需一端：MCP Server 工具返回结构化（需真实高德）。适配器/工具箱原始透传原型已实现（`mcp_tools_adapter._coerce_structured` + `MCPToolbox.call` 去 `str()`），但旧入口兼容和 FastMCP 原生 structured content 读取尚未闭环，因此不计为完成。
+- 验证：新增 `tests/test_structured_result.py` 4 个用例（判定、POI 结构化消费、POI 文本兜底、酒店结构化消费）与 `tests/test_mcp_adapter_structured.py` 6 个用例（JSON 对象/数组解析、纯文本与非对象 JSON 原样返回、工具箱透传），全量回归 90/90、离线评测 4/4、py_compile 与 `git diff --check` 通过。
+
+## 当前改动与后续计划复核（2026-08-24）
+
+### 本次改动直接引入的风险
+
+- `MCPToolbox.call()` 从始终返回字符串改成透传 `dict/list`，但旧 `POIAgent` 会把 dict 写入 `TravelPlanState.poi: str`，`WriterAgent` 随后按字符串拼接；天气 Agent 使用 `"\n".join()`、路线 Agent 使用 `startswith()`、预算 Agent 使用正则。结构化结果一旦真正启用，旧入口存在明确类型回归，因此这组改动当前不满足合并条件。
+- 2026-08-24 定向探针让 `search_poi` 返回结构化 dict，旧 `MultiAgentTravelPlanner` 的结果为 `answer_empty=true`、Writer trace `status=error`，错误为 `expected str instance, dict found`；这把 D12 从静态推断提升为当前代码可复现的兼容缺陷。
+- `MCPToolAdapter.call_mcp_tool_async()` 仍只读取 `result.content[0].text`，没有优先读取 FastMCP 原生 `structured_content/data`；现有测试只验证 JSON 文本和手工构造 dict，没有验证真实 FastMCP 返回对象。
+- 当前安装的 FastMCP 3.4.0 中，`CallToolResult` 明确定义 `content`、`structured_content`、`meta`、`data`、`is_error`；适配器应归一化这些字段，而不是只取第一个文本块。
+- `is_structured_poi()` / `is_structured_hotel()` 只要命中任一字段就接受整个 dict；`as_list()` 只检查外层 list，不过滤非 dict 元素。酒店逻辑随后直接调用 `candidate.get()`，坏元素会使整个 HotelAgent 降级，合法候选也一起丢失。
+- 当前 `90/90` 通过有价值，但字符串旧链路测试和结构化 happy-path 测试彼此分离，没有覆盖“结构化 MCP 开启后的旧三入口兼容”，所以不能作为 D12 完成证据。
+
+### 未来启用结构化 MCP 后才会触发的风险
+
+- 同步 MCP Server 当前仍返回文本，正常本地演示尚未走到上述 dict/list 路径；因此应把问题表述为“已确认的合并/启用风险”，而不是当前生产主链路已经持续报错。
+- 供应商返回结构化数据后，需要同时处理 `structured_content/data`、文本 content、空结果、部分坏元素、schema 版本和文本 fallback；只解析看起来像 JSON 的首个文本块会丢失协议语义。
+
+### 原有计划缺口
+
+- D12 原方案只写“优先读取 structured content + Pydantic + 三入口测试”，没有冻结适配器对上层的返回形态。修订为稳定结果封装，并显式提供字符串兼容访问和结构化访问，避免所有旧 Agent 被迫同步迁移。
+- 原顺序 `D11 -> D12 -> D2` 先做 DeepSeek 观测，未优先处理当前工作树已改变的公共类型边界。修订为“范围隔离 -> D12 -> D2 -> D11 -> 真实验收”；先消除已引入的跨入口风险，再产出候选 Contract，最后用准确观测完成真实对照。
+- V3 固定 DOM 不能算产品行为，且继续保留会制造能力误解；2026-08-24 已按废案删除 `/v3` 路由和 `web/v3_*`。`.dsh/` 对本地实验有价值，但不属于 TravelMind 产品运行时，继续留在产品提交之外。
+
+### 方案取舍
+
+- 选择稳定结果封装而不是原始 `dict/list` 全局透传：优点是协议、业务模型和旧字符串链路解耦，新增工具可复用统一边界；缺点是多一层薄模型和访问方法。
+- 选择 D12 先于 D11：优点是先封闭当前直接回归风险；缺点是 DeepSeek trace 改善稍后落地。D11 仍保留为 Phase 2 关闭前硬闸门。
+- 产品主线在 Phase 2 后优先进入 Phase 3：优点是直接改善当前已量化的预算偏差和全局路线问题；缺点是 Phase 2.5 agentic 探索延后，但不会用更强自主性放大尚未稳定的事实与观测边界。
+
+## D12 稳定 MCP 结果封装（2026-09-05）
+
+- 适配器新增 `MCPToolResult`（`tool_name`/`text`/`data`/`source`/`validation_error`）与 `call_mcp_tool_result(_async)`；`call_mcp_tool(_async)` 恒返回字符串（结构化返回以 JSON 文本给出），`/api/chat` 的 LangChain 包装与旧多 Agent 链路因此字符串安全，2026-08-24 复现的 `expected str instance, dict found` 缺陷从边界上消除。
+- 结构化数据只读 FastMCP 解包后的 `result.data`（dict/list 判定），不读线协议 `structured_content`：3.4.0 中非 object 返回会被 `{"result": ...}` 包裹（wrap 陷阱），`data` 即其解包值；`-> str` 工具的 `data` 是字符串，不会被误判为结构化。
+- 空结果判定必须覆盖空白文本：3.4.0 中工具返回 `''` 时 `content=[TextContent('')]` 非空，仅判 `result.content` 抓不到；现统一归一化为「工具 X 返回了空结果。」（source=empty）。
+- `MCPToolbox` 提供 `call_text()`/`call_structured()`，`call()` 保留为文本别名，旧 6 个 Agent 文件零改动；规划器 5 个调用点显式化：POI/酒店 `call_structured`，天气/跨城/市内 `call_text`。
+- `structured_result.py` 重写为 Pydantic 响应模型层：`PlaceCandidate`（仅强制 name 非空白，`extra="allow"`）作元素校验闸门，合法元素保留原始 dict（hotel_service 原地修改 cost/match_reason 依赖此形态）；`parse_poi_response`/`parse_hotel_response` 坏元素过滤并回填 `validation_error`；删除 `is_structured_*`/`as_list`。
+- 适配器构造参数接受 FastMCP 实例（`Client(server)` 内存直连，完整 JSON-RPC 往返不起 HTTP），新增 `tests/test_mcp_protocol.py` 11 用例：dict/无注解 str/`-> str` wrap 陷阱/JSON 文本兜底/空文本/工具异常/非法 schema 全形态 + 三入口回归（旧链路 dict 返回不崩溃、规划器消费结构化、LangChain 包装返回 str）。协议事实提示：升级 fastmcp 前需重跑 wrap/data 语义探针。
+- 行为变化：`call` 恒返回 str；空白文本统一空结果文案；`pois/hotels["raw"]` 恒为 str；hotel `provider_status` 空值回退 provider 状态。
+- 验证：全量回归 112/112（37.6s）、评测 4/4（141 次调用/4 次 fixture 失败已固化为 `test_baseline_eval` 断言）、py_compile/`node --check`/`git diff --check` 通过。MCP Server 工具仍返回文本（供应商协议未改，按计划待混合来源证据后再切换）。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
 
-- 首轮优化顺序已经确定为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 工具增强规划脑（可选 agentic 补查）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。
+- 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞 Phase 3。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
-- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；旧 POI/酒店字段和文本 MCP 协议保持不变；另完成酒店超预算回退标记、来源状态误标修复等收尾修复。`candidate_contracts` 尚未在 `run()` 接线（工程债务 D2）。
+- Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；`candidate_contracts` 仍未在 `run()` 接线（D2）。
 - 2026-08 收尾修复已推送到 main：v2 替代 v1 成为唯一前端入口、MCP 默认端口统一 8098、样式文件更名 styles.css；全量回归 61/61、评测 4/4 通过。
 - 当前评测仍暴露未解决问题：平均硬约束满足率 `0.7500`，低预算/多人预算没有反馈重规划，紧换乘场景仍需要全局路线门槛；预算偏差 `0.6230`（超预算酒店如实呈现，等待 Phase 3 替换/降级）。
-- Phase 2.5 已写入执行计划（`docs/implementation-plan.md`），前置条件为 Phase 2.2 稳定 id 事实层和 MCPToolAdapter 连接复用。
+- Phase 2.5 已写入执行计划（`docs/implementation-plan.md`），前置条件包括 Phase 2.2 稳定 id/D12 协议边界、D11 准确观测和 D1 MCPToolAdapter 连接复用。
 
 ### 下一次继续步骤
 
 1. 先读取本文件、[target-architecture.md](target-architecture.md)、`docs/implementation-plan.md` 的 Phase 2/2.5 与看板、`docs/project-baseline.md`。
-2. 继续 Phase 2 收尾：补充高德成功、Key 缺失、本地 fallback 和混合来源的 Contract/排序测试；执行 2.8（工具 description 精修、`response_format=json_object`）。
-3. 推进 Phase 2.2 稳定 id 事实层：MCP 结构化返回或后端回溯映射生成 id；这是 Phase 2.5 的硬前提。
-4. Phase 2.5：迁移验证脚本（`output/` → `tools/verify/` 或 `tests/evals/`）、MCPToolAdapter 连接复用、三步灰度（天气 → POI/酒店 → 路线），每步离线评测 + 真实对照，观测字段完整率、id 回溯命中率、调用次数。
-5. 全部改动后重新运行全量回归、离线评测、Python/Node/diff 检查，再决定是否进入 Phase 3。
+2. 先隔离结构化 MCP、`.dsh/` 和文档范围，完成 D12 的稳定结果封装、双访问方式、严格响应校验、真实 FastMCP 协议测试和三入口兼容；V3 已关闭，不再进入后续工作。
+3. 完成 D2，在 `/api/plan` 接线可选、版本化 `candidate_contracts`，并补旧字段兼容断言。
+4. 完成 D11 的错误分类和准确降级 trace，再执行固定真实 DeepSeek 场景；随后补高德成功、Key 缺失、本地 fallback 和混合来源测试。
+5. 重跑全量回归、离线评测、Python/Node/diff、真实服务对照和主页面浏览器验收；关闭 Phase 2 后产品主线进入 Phase 3，Phase 2.5 保持可选实验支线。
 
 ### 建议排除出日常上下文的材料
 

@@ -1,7 +1,7 @@
 # TravelMind 项目认知基线
 
 > 整理自根目录 `PROJECT_BASELINE.md`，2026-08-04 合并；代码根目录为 `my-langgraph-agent-main/`。
-> 原文件更新时间：2026-07-31。
+> 原文件更新时间：2026-07-31；当前工作树复核时间：2026-08-24。
 
 ## 1. 一句话定位
 
@@ -13,10 +13,10 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 ## 2. 当前仓库状态
 
-- 分支：`main`
-- HEAD：`2cf8ec8 Initial commit`（原勘察时记录；以实际 `git status` 为准）
+- 分支：`main`，相对 `origin/main` 领先 5 个本地提交
+- HEAD：docs 同步提交；其前一个为 `dfb5a5b`（`feat: support structured MCP results with text fallback`，2026-09-05 D12）
 - 认知与执行文档现位于 `docs/`（2026-08-04 整理后），根目录同名文件为历史留档。
-- 工作区包含 Phase 1/Phase 2 业务改动、离线评测和执行文档。
+- 工作区仅剩 `.dsh/` 本地技能资产未跟踪（保持在产品提交之外）。V3 已于 2026-08-24 按废案删除；结构化 MCP 原型已按 D12 完成并提交（2026-09-05）。
 
 ## 3. 架构总览
 
@@ -59,11 +59,13 @@ flowchart LR
 |---|---|---|
 | `sync/travel_web_app.py` | FastAPI 应用、三条 API、静态地图代理、单 Agent 初始化 | 当前 Web 入口 |
 | `sync/fastmcp_server_streamhttp.py` | FastMCP HTTP Server、高德调用、缓存限速、备用数据、文件输出 | 当前 MCP 入口 |
-| `sync/mcp_tools_adapter.py` | FastMCP Client 与 LangChain 工具包装 | 连接层 |
+| `sync/mcp_tools_adapter.py` | FastMCP Client、`MCPToolResult` 稳定封装、`call_mcp_tool`/`call_mcp_tool_result` 双 API 与 LangChain 工具包装；构造参数接受 FastMCP 实例支持内存直连 | 连接层，D12 已闭环（2026-09-05） |
 | `sync/multi_agent/structured_planner.py` | 结构化规划编排器（约 660 行），业务逻辑已拆分到同目录 20 个模块 | 当前核心业务模块 |
-| `sync/multi_agent/contracts.py` | 地点、酒店、路线、天气和来源元数据 Contract | Phase 2 事实边界 |
+| `sync/multi_agent/contracts.py` | 地点、酒店、路线、天气和来源元数据 Contract，含 `stable_place_id` 稳定 id | Phase 2 事实边界 |
 | `sync/multi_agent/fact_normalizer.py` | 将旧文本解析结果归一化为 JSON-safe 事实 | Phase 2 兼容层 |
 | `sync/multi_agent/candidate_ranker.py` | 候选硬过滤、评分、排序和入选/落选理由 | Phase 2 纯逻辑层 |
+| `sync/multi_agent/deepseek_contracts.py` | DeepSeek 四类输出的 Pydantic 契约与类型归一化 | Phase 2.5 强 schema 校验基础 |
+| `sync/multi_agent/structured_result.py` | POI/酒店 Pydantic 响应模型、坏元素过滤解析（`parse_poi_response`/`parse_hotel_response`）与 `validation_error` 回填 | Phase 2.2/D12 已完成（2026-09-05） |
 | `sync/multi_agent/*.py` | 状态模型、偏好 Agent、事实 Agent、Writer 和旧多 Agent 编排 | 追问/兼容链路 |
 | `web/index.html` | 工作台骨架（v2 版）、表单、结果区、追问区 | 唯一页面入口 |
 | `web/app.js` | 请求、状态恢复、结果渲染、编辑、预算重算、导出 | 当前前端逻辑 |
@@ -141,6 +143,8 @@ flowchart LR
 
 高德调用集中经过缓存、最小请求间隔、QPS 错误识别和退避重试。天气优先高德，随后使用 `wttr.in`；POI 与酒店优先高德，随后使用本地知识或规则。
 
+适配器把每次工具调用收敛为 `MCPToolResult` 稳定封装（`text` 恒可用、结构化 `data`、`source` 与 `validation_error`）；工具箱提供 `call_text()`（恒字符串）/`call_structured()`（显式取数据）双访问。当前 MCP 工具仍返回文本，结构化消费路径由 `tests/test_mcp_protocol.py` 的内存 FastMCP 协议级测试保障。
+
 铁路、航班、酒店库存当前是供应商占位适配器：页面展示策略候选和参考区间，实时车次、航班号、库存和可预订价需要后续接入正式供应商。
 
 ## 7. 运行方式
@@ -157,7 +161,7 @@ $env:MCP_SERVER_URL='http://127.0.0.1:8098/my-custom-path'
 
 访问：`http://127.0.0.1:8010/`
 
-配置注意：MCP Server 和 Web 代码的默认 MCP 地址仍含 `8083`，仓库演示约定使用 `8098`；运行 Web 时显式设置 `MCP_SERVER_URL` 是当前稳定启动条件。
+配置注意：当前产品 Web 和同步 FastMCP Server 的默认端口已统一为 `8098`，路径为 `/my-custom-path`。`8083` 只残留在遗留 `sync/agent_chatbot_LCEL.py` 和适配器命令行示例；运行时仍建议显式设置 `MCP_SERVER_URL`，避免遗留入口或外部环境覆盖造成漂移。
 
 ## 8. 前端行为
 
@@ -173,7 +177,7 @@ $env:MCP_SERVER_URL='http://127.0.0.1:8098/my-custom-path'
 
 ## 9. 已验证结果
 
-执行日期：2026-07-31
+最近复核：2026-09-05
 
 ```text
 Python 全量 py_compile（sync/async/tests）：通过
@@ -181,21 +185,24 @@ node --check web/app.js：通过，Node v24.18.0
 Phase 1 专项测试：5/5 通过
 Phase 2 Contract/集成测试：7/7 通过
 Phase E 约束链路测试：22/22 通过
+D12 协议级测试（tests/test_mcp_protocol.py）：11/11 通过
 Phase 0 评测：4/4 通过；Phase 1/Phase 2 评测均为 10 个场景，Phase 2 硬约束满足率 0.7500
-python -m unittest discover -s tests -v：60 个通过（2026-08 复测）
-合计测试：60/60 通过
+评测确定性断言：141 次调用/4 次 fixture 失败（已固化进 test_baseline_eval）
+python -m unittest discover -s tests -q：112 个通过，37.597 秒（当前工作树）
+合计测试：112/112 通过
+pip check：通过
 git diff --check：通过
 ```
 
-当时探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证（验证结果以 `docs/implementation-plan.md` 的最新记录为准）。
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `112/112` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定；真实 HTTP MCP、高德、DeepSeek 与浏览器端到端仍未验证。
 
 ## 10. 后续开发的优先关注点
 
-1. Phase 2：补充高德成功、Key 缺失、fallback 和混合来源的 Contract/排序回归，并分析 fallback 率上升。
-2. 保持返程交通与目的地住宿隔离、真实地点来源标记和旧 API 字段兼容。
-3. 再评估是否让 MCP Server 返回结构化对象；在此之前继续使用兼容解析器。
-4. 后续再处理预算反馈循环、全局质量门、结构化追问和真实任务事件；不要在 Phase 2 混入这些范围。
-5. 长期维护项仍包括 MCP 端口统一、真实服务接口回归、Playwright 桌面/移动端检查，以及拆分 `structured_planner.py` 职责。
+1. [已完成 2026-09-05] 范围隔离与 D12 已按闸门提交（`dfb5a5b feat: support structured MCP results with text fallback`）；`.dsh/` 继续留在产品提交之外。
+2. [已完成 2026-09-05] D12：稳定 MCP 结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容。
+3. 完成 D2：让 `/api/plan` 输出可选、版本化 `candidate_contracts`，同时保留旧 `pois`/`hotels`；D3 前端来源展示在此之后进行。
+4. 完成 D11 的错误分类和降级观测，再补高德成功、Key 缺失、fallback、混合来源和固定 DeepSeek 真实场景；离线与真实证据都通过后关闭 Phase 2。
+5. 产品主线随后进入 Phase 3 的预算反馈与全局质量门；Phase 2.5 保持可选实验。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛。
 
 ## 11. 维护入口速查
 
