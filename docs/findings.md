@@ -256,6 +256,18 @@ MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时
 - 前端与导出：预算卡「预算自动调整」折叠块（动作/缺口/口径）、体检「硬门槛提醒」区块、导出 Markdown 与后端 markdown_writer 同步调整段；新字段经快照整包克隆自动持久化。
 - 验证：新增 21 个测试（优化器 10、门禁 6、run() 级 4、eval 对照 1）；全量回归 145/145、评测 5/5（139/4 固化）、py_compile/`node --check`/`git diff --check` 通过。
 
+## Phase 4 结构化追问（2026-09-05）
+
+- 新增 `POST /api/refine-plan`：请求携带完整计划 JSON + 追问文本，服务端无状态；响应 `{status, changed, plan, diff, explanation, markdown, llm_status, review_source}`。旧三端点零改动。
+- 追问解析为第 5 个脑方法 `parse_refine_ops`：新契约 `RefineOperation/RefineOutput`（7 类 action；budget>0、pace/strategy 枚举白名单；operations≤12；无操作时 answer 必填的跨字段校验）。铁律落实：模型只能引用 plan 摘要中的 item_id 与候选池 candidate_id，后端逐条校验（存在/未使用/非自身），非法引用跳过并写入 explanation。
+- 两阶段应用（`refine_parser.py`）：先 `locate_targets` 定位全部 op 目标再执行——`_retime_day_items` 会重生成 item id，边改边定位会让后续 op 失效；同一 (day,item) 只接受第一条结构 op；replace 不触发 retime（保留整天原始时间槽），add/remove 才 retime。
+- 状态恢复铁律：**禁止重跑 `_normalize_preferences`**——其交通方式映射只认中文标签，会把 canonical code（如 "flight"）静默重置为 defaults；直接使用 `plan.preferences`，只对 `preferenceProfile` 重跑幂等归一化。
+- 重算尾部用 **rule 体检替代 LLM 体检**：`_review_and_repair_itinerary` 可能用 repaired_plan 覆写行程、撤销用户刚应用的操作；rule 评审确定性且零 LLM，响应 `review_source="rule"`。diff 以「重算前快照 vs 重算后最终 plan」计算——budget loop 的自动调整同样进 diff，explanation 单独说明。
+- 实现中发现并修复一个真实缺陷：候选查重不能用伪 item 调 `_itinerary_used_place_keys`——POI 的 id 字段名是 `id` 而非 `poi_id`、location 是坐标 dict，构造的查重键永远错位，「候选已被使用」护栏形同虚设；改为显式 `_candidate_place_keys`（id + 名称|地址，与 item 键对齐）。
+- 语义边界：纯咨询/语义不确定 → `answer_only`（或 needs_confirmation）→ 只回答不改计划、不 bump 版本、不回退旧链路；parse 降级（schema/call/unavailable）→ `status=failed` 且 plan 原样返回——失败追问不覆盖当前计划。
+- 前端 `sendMessage` 三路径：有计划先走 refine（changed → 更新计划+重渲染+版本徽标；无变更 → 只回答），失败/不可用自动回退旧链路并标注「旧链路文本回答，未修改当前计划」；无计划直接走旧链路（现状）。`TRAVELMIND_REFINE=off` 服务端 503，为回滚开关。
+- 验证：新增 `tests/test_phase4_refine.py` 44 用例；全量回归 **189/189**、评测 5/5（139/4 不变——refine 不触碰 run_baseline）、py_compile/`node --check`/`git diff --check` 通过。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态

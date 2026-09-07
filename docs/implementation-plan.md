@@ -64,7 +64,7 @@
 | Phase 2 | 事实结构化、候选评分和可解释选择 | 稳定 id 事实层、排序器、工具适配和测试 | 已完成（2026-09-05 验收） |
 | Phase 2.5 | 可选工具增强规划脑（agentic 补查） | 只读白名单、id 回填、三步灰度、新增评测指标 | 待开始 |
 | Phase 3 | 预算反馈和全局质量门 | 调整循环、全局评审、差异字段 | 已完成（2026-09-05） |
-| Phase 4 | 结构化追问与计划版本 | refine API、版本 Diff、前端交互 | 待开始 |
+| Phase 4 | 结构化追问与计划版本 | refine API、版本 Diff、前端交互 | 已完成（2026-09-05） |
 | Phase 5 | 持久化、真实进度和产品化质量门 | Memory、事件流、观测、E2E | 待开始 |
 
 执行分流（2026-08-19）：Phase 2.5 是可选实验支线，不再作为 Phase 3 的必经阶段。Phase 2 达到 D2/D11/D12 验收闸门后，产品主线优先进入 Phase 3；只有当前目标明确为验证 agentic 补查时，才在独立 feature flag/分支上推进 Phase 2.5。
@@ -393,14 +393,24 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - `web/app.js`、`web/index.html`、`web/styles.css`
 - `tests/` 中 refine API、版本和前端交互测试
 
-### 具体步骤
+### 具体步骤（已完成 2026-09-05）
 
-- [ ] 4.1 定义 `plan_id`、`version`、`parent_version` 和输入约束快照。
-- [ ] 4.2 增加结构化 refine 请求，包含当前计划、用户追问和可选修改范围。
-- [ ] 4.3 将追问解析为增量操作：替换地点、调整预算、改变节奏、增加/删除活动、修改住宿策略。
-- [ ] 4.4 对增量操作重新执行受影响的候选、路线、预算和质量检查。若 Phase 2.5 已启用，受影响部分的候选补查可复用工具增强脑；本轮不依赖它。
-- [ ] 4.5 返回结构化 Diff、解释和最新 Markdown；失败时保留旧版本。
-- [ ] 4.6 前端追问改为调用 refine 接口，展示版本和修改摘要。
+- [x] 4.1 定义 `plan_id`、`version`、`parent_version` 和输入约束快照。
+- [x] 4.2 增加结构化 refine 请求，包含当前计划、用户追问和可选修改范围。
+- [x] 4.3 将追问解析为增量操作：替换地点、调整预算、改变节奏、增加/删除活动、修改住宿策略。
+- [x] 4.4 对增量操作重新执行受影响的候选、路线、预算和质量检查。若 Phase 2.5 已启用，受影响部分的候选补查可复用工具增强脑；本轮不依赖它。
+- [x] 4.5 返回结构化 Diff、解释和最新 Markdown；失败时保留旧版本。
+- [x] 4.6 前端追问改为调用 refine 接口，展示版本和修改摘要。
+
+### Phase 4 实际结果（2026-09-05）
+
+- 新增 `plan_version.py`（`bootstrap_version`/`next_version`/`compute_diff`/`build_explanation`：version 从 0 起、refine_history 截断 10 条、constraint_snapshot 首次引导落盘、diff 含 items_changed（day/action/item_id/before/after，同日同类一删一增配对为 replaced）+ budget（含 verdict 前后）+ preferences + constraints_changed 预留字段）与 `refine_parser.py`（`build_refine_payload` 紧凑摘要含 item_id 与候选 type、`locate_targets` 两阶段定位——retime 会重生成 id 故先定位后应用、`apply_operations` 七类操作与护栏）。
+- 契约与脑：`RefineOperation`/`RefineOutput`（action 必填、budget>0、pace/strategy 枚举白名单、operations≤12、无操作时 answer 必填的跨字段校验）+ 第 5 个脑方法 `parse_refine_ops`（降级三态与既有方法一致）。铁律落实：模型只引用 plan 摘要中的 item_id 与候选池 candidate_id，后端逐条校验，非法引用跳过并进 explanation。
+- `StructuredTravelPlanner.refine_plan(plan, message)`：**run() 冻结不动**。入口校验 7 个必需键（缺 → failed）；状态恢复**禁止重跑 `_normalize_preferences`**（canonical 交通 code 会被重置），只重跑幂等的 `_normalize_preference_profile`；重算尾部用 rule 体检替代 LLM 体检（防止 repaired_plan 覆写用户 op），顺序与 run() tail 一致；`TRAVELMIND_REFINE` 服务端开关（off → 503）。
+- 护栏（与 gate/loop 同口径）：remove 后总量（含 note）≥ max(2, days×2) 且每日 concrete≥2；add 每天 movable<5、无候选时落 `llm_suggestion` 建议项不进地图；同一 (day,item) 只接受第一条结构 op；replace 不触发 retime（保留整天原始时间槽），add/remove 才 retime。实现中发现并修复：候选查重不能用伪 item 调 `_itinerary_used_place_keys`（POI 的 id 字段名与 item 的 poi_id 不同、location 是坐标 dict，查重键永远错位），改为显式 `_candidate_place_keys`（id + 名称|地址）。
+- API：`POST /api/refine-plan`（400 缺键/空 message、503 开关关闭）；旧三端点零改动。
+- 前端：`sendMessage` 三路径——有计划先走 refine（ok+changed：更新计划/重渲染/版本徽标+解释；ok+无变更：只回答），failed/不可用自动回退旧 `/api/multi-agent-chat` 并标注「旧链路文本回答，未修改当前计划」；无计划直接走旧链路。快照整包克隆自动持久化 version/refine_history。
+- 测试：新增 `tests/test_phase4_refine.py` 44 用例（版本 7、契约 8、脑 3、应用 14、编排 6、HTTP 2、前端 3 + 辅助）；全量回归 189/189，评测 5/5（139/4 不变——refine 不触碰 run_baseline），py_compile/`node --check`/`git diff --check` 通过。
 
 ### 验收标准
 
@@ -495,7 +505,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [completed] Phase 2：事实 Contract、候选评分与选择（2026-09-05 真实验收后关闭）
 - [pending] Phase 2.5：可选工具增强规划脑（agentic 补查）
 - [completed] Phase 3：预算反馈循环与全局质量门（2026-09-05）
-- [pending] Phase 4：结构化追问、计划版本与 Diff
+- [completed] Phase 4：结构化追问、计划版本与 Diff（2026-09-05）
 - [pending] Phase 5：持久化、真实进度与产品化质量门
 - [pending] 工程债务 D1/D3-D10（D2/D11/D12/D13 已关闭；D1 为 Phase 2.5 前置）
 
