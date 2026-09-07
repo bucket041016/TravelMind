@@ -9,7 +9,7 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 当前用户端主链路是结构化表单 + `/api/plan`；自然语言追问继续走 `/api/multi-agent-chat`。
 
-当前阶段：Phase 0 和 Phase 1 已完成；Phase 2（事实 Contract、候选归一化与排序）进行中，2026-08-14 起新增 Phase 2.5（可选工具增强规划脑，agentic 补查）进入路线图。
+当前阶段：Phase 0-1 已完成；Phase 2 已完成并于 2026-09-05 通过真实验收关闭；Phase 3（预算反馈循环与全局质量门）已于 2026-09-05 完成；Phase 2.5 保持可选实验支线。产品主线下一步为 Phase 4（结构化追问与计划版本）。
 
 ## 2. 当前仓库状态
 
@@ -105,7 +105,7 @@ flowchart LR
 }
 ```
 
-主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`candidate_contracts`、`map`、`budget`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 新增可选 `candidate_contracts`（2026-09-05 已在 `run()` 接线，见工程债务 D2），旧 `pois`/`hotels` 字段继续保留。
+主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`candidate_contracts`、`map`、`budget`、`budget_adjustments`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 新增可选 `candidate_contracts`（2026-09-05 已在 `run()` 接线，见工程债务 D2），旧 `pois`/`hotels` 字段继续保留；Phase 3 新增可选 `budget_adjustments`（同步写 `budget.adjustments`）与 `quality_review.gate_violations`（2026-09-05）。
 
 `constraintSummary` 按 `hard`、`soft`、`unknown` 分组；每项保留 `id`、`kind`、`text`、`source`。质量评审逐项给出 `satisfied`、`violated` 或 `unknown`，并附 `evidence`。
 
@@ -190,25 +190,26 @@ Phase E 约束链路测试：22/22 通过
 D12 协议级测试（tests/test_mcp_protocol.py）：11/11 通过
 D2/D11 规划器契约与 trace 测试（tests/test_phase2_contracts.py）：13/13 通过
 D11 DeepSeek 契约测试（tests/test_deepseek_contracts.py）：16/16 通过
-Phase 0 评测：4/4 通过；Phase 1/Phase 2 评测均为 10 个场景，Phase 2 硬约束满足率 0.7500
-评测确定性断言：141 次调用/4 次 fixture 失败（已固化进 test_baseline_eval）
-python -m unittest discover -s tests -q：124 个通过，62.956 秒（当前工作树）
-合计测试：124/124 通过
+Phase 3 预算循环与质量门测试（tests/test_phase3_budget_loop.py）：20/20 通过
+Phase 0 评测：5/5 通过（含 Phase 3 low_budget on/off 对照）；评测均为 10 个场景
+评测确定性断言：139 次调用/4 次 fixture 失败（Phase 3 重定基线，原 141）
+python -m unittest discover -s tests -q：145 个通过（当前工作树）
+合计测试：145/145 通过
 pip check：通过
 git diff --check：通过
 ```
 
-本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `124/124` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `145/145` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
 
 2026-09-05 真实验收补充（详见 findings.md 验收记录）：真实高德成功场景 24 个真实 POI + 契约输出正确（quality 72）；Key 缺失降级场景真实地点护栏守住、`candidate_contracts` 不放行不可定位项（quality 65）；DeepSeek 五态真实基线 used=2/其余 0（3 次真实规划）；桌面浏览器主流程完整渲染且控制台 0 错误。移动端视口遗留 Phase 5。
 
+2026-09-05 Phase 3 补充：预算反馈循环与硬质量门默认开启（`TRAVELMIND_BUDGET_LOOP=off` 可回滚）；评测重定基线 139 次调用，**预算偏差 0.6230 → 0.4897**，low_budget 927 元（原 ~1451）、return_transfer_isolation 转预算内；`budget_adjustments`/`gate_violations` 字段与前端/Markdown 展示详见 findings.md。
+
 ## 10. 后续开发的优先关注点
 
-1. [已完成 2026-09-05] 范围隔离与 D12 已按闸门提交（`dfb5a5b feat: support structured MCP results with text fallback`）；`.dsh/` 继续留在产品提交之外。
-2. [已完成 2026-09-05] D12：稳定 MCP 结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容。
-3. [已完成 2026-09-05] D2：`/api/plan` 已输出可选、版本化 `candidate_contracts`（提交 `029ef20`），旧 `pois`/`hotels` 保留；D3 前端来源/落选展示在此之后进行。
-4. [已完成 2026-09-05] D11 错误分类和降级观测已落地（提交 `05def10`）；真实验收已执行——真实高德成功/Key 缺失降级、DeepSeek 五态基线（used=2/其余 0）、桌面浏览器主流程 0 控制台错误；移动端视口遗留 Phase 5。Phase 2 离线与真实证据齐备，具备关闭条件。
-5. 产品主线具备进入 Phase 3（预算反馈与全局质量门）的条件；Phase 2.5 保持可选实验。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；新观察项见 findings.md 验收记录（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约）。
+1. [已完成 2026-09-05] Phase 2 收尾：D12（`dfb5a5b`）、D2（`029ef20`）、D11（`05def10`）+ 真实验收（高德成功/降级、DeepSeek 五态基线、桌面浏览器主流程 0 控制台错误）；移动端视口遗留 Phase 5。
+2. [已完成 2026-09-05] Phase 3：确定性预算反馈循环（三杠杆、轮上限 2、可解释调整记录）+ 硬质量门（独立 gate_violations 字段）；预算偏差 0.6230 → 0.4897；评测基线重定为 139 次调用。
+3. 产品主线下一步为 Phase 4（结构化追问与计划版本 Diff）；Phase 2.5 保持可选实验（前置 D1 连接复用）。长期维护项包括 Playwright 桌面/移动验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；观察项见 findings.md（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约、low_budget/family_budget 需供应商接入才能完全达标）。
 
 ## 11. 维护入口速查
 

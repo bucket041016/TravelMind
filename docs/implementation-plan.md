@@ -61,9 +61,9 @@
 |---|---|---|---|
 | Phase 0 | 建立离线评测基线和护栏 | `tests/evals/`、场景 fixture、指标报告 | 已完成 |
 | Phase 1 | 让用户约束完整进入规划链路 | 请求/状态/前端契约、约束解析测试 | 已完成 |
-| Phase 2 | 事实结构化、候选评分和可解释选择 | 稳定 id 事实层、排序器、工具适配和测试 | 进行中 |
+| Phase 2 | 事实结构化、候选评分和可解释选择 | 稳定 id 事实层、排序器、工具适配和测试 | 已完成（2026-09-05 验收） |
 | Phase 2.5 | 可选工具增强规划脑（agentic 补查） | 只读白名单、id 回填、三步灰度、新增评测指标 | 待开始 |
-| Phase 3 | 预算反馈和全局质量门 | 调整循环、全局评审、差异字段 | 待开始 |
+| Phase 3 | 预算反馈和全局质量门 | 调整循环、全局评审、差异字段 | 已完成（2026-09-05） |
 | Phase 4 | 结构化追问与计划版本 | refine API、版本 Diff、前端交互 | 待开始 |
 | Phase 5 | 持久化、真实进度和产品化质量门 | Memory、事件流、观测、E2E | 待开始 |
 
@@ -342,15 +342,24 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - `web/app.js`（展示调整记录）
 - `tests/` 中循环、上限、回滚和全局质量测试
 
-### 具体步骤
+### 具体步骤（已完成 2026-09-05）
 
-- [ ] 3.1 将质量检查拆为硬门槛和软评分，先验证硬门槛。
-- [ ] 3.2 计算全天时间线、移动耗时、开放时间、用餐间隔、休息间隔、天气适配和返程安全余量。
-- [ ] 3.3 定义预算调整优先级：先替换同片区高价活动，再调整酒店档位/住宿策略，最后调整交通或非硬性活动。
-- [ ] 3.4 增加最多 2-3 轮的预算/可行性反馈，保留每轮输入摘要、调整动作和结果。
-- [ ] 3.5 超出循环上限仍不满足时，输出最接近方案和明确缺口，不无限重试。
-- [ ] 3.6 增加返回目的地、跨城日期和最后一晚住宿一致性检查。
-- [ ] 3.7 增加预算偏差、路线超容忍率和不可行行程测试。
+- [x] 3.1 将质量检查拆为硬门槛和软评分，先验证硬门槛。
+- [x] 3.2 计算全天时间线、移动耗时、开放时间、用餐间隔、休息间隔、天气适配和返程安全余量。
+- [x] 3.3 定义预算调整优先级：先替换同片区高价活动，再调整酒店档位/住宿策略，最后调整交通或非硬性活动。
+- [x] 3.4 增加最多 2-3 轮的预算/可行性反馈，保留每轮输入摘要、调整动作和结果。
+- [x] 3.5 超出循环上限仍不满足时，输出最接近方案和明确缺口，不无限重试。
+- [x] 3.6 增加返回目的地、跨城日期和最后一晚住宿一致性检查。
+- [x] 3.7 增加预算偏差、路线超容忍率和不可行行程测试。
+
+### Phase 3 实际结果（2026-09-05）
+
+- 新增 `sync/multi_agent/budget_optimizer.py`（确定性反馈循环，零 LLM/工具调用；杠杆顺序：同片区高价项替换 activity+food → 住宿 `budget_strategy=cheapest_first` → 非硬性付费活动删减；每动作记录 before/after/saved/reason，轮上限 2，deepcopy 快照异常回滚）、`sync/multi_agent/quality_gate.py`（硬门槛：返程后住宿串台、item 总量下限、硬约束预算↔verdict、单日时长粗检；违规写独立字段 `quality_review.gate_violations`，不改 issues/scores/source）、`sync/multi_agent/itinerary_builder._retime_day_items`（删项后时间槽重排）。
+- `run()` 集成：循环插在评审后、市内路线重建前（临时预算用 movement_count 口径，决策只用相对节省量，金额标注"调整期估算"）；门禁在 BudgetAgent 后读取最终 verdict；响应新增顶层 `budget_adjustments`（同步写 `budget.adjustments` 供 markdown/前端）；`TRAVELMIND_BUDGET_LOOP` 默认 on，off 为回滚开关（off 时响应 `{enabled:false}` 且跳过门禁）。
+- 决策记录（用户确认）：循环默认开启；评测 141 调用断言重定为实测 **139**（删项减少 2 次 judge_route），指标重定基线并生成 `tests/evals/phase3_report.*` 对照。
+- 评测对照（Phase 2 → Phase 3）：**预算偏差 0.6230 → 0.4897**；low_budget 偏差 ~1.9 → 0.854（仍超预算——跨城+最低酒店已超 500 目标，符合"真实调整+缺口可解释"验收口径）；return_transfer_isolation 2107 → 1601 转为预算内且串台率保持 0；fallback 率 0.1000 不变；真实地点绑定率 0.5940 → 0.5903（替换/删项后可定位项微调）；硬约束满足率 0.7500 不变（low_budget/family_budget 数学上无法达标，留待供应商接入）。
+- 前端：`#budgetSection` 新增「预算自动调整」折叠块（轮次/缺口/每动作 改了什么·为什么·代价 + 口径标注）；体检详情新增「硬门槛提醒」区块（gate_violations 全量展示）；导出 Markdown 与后端 markdown_writer 同步两段。
+- 测试：新增 `tests/test_phase3_budget_loop.py` 20 用例（优化器 10 + 门禁 6 + run() 级 4）与 eval 对照测试 1 例；全量回归 145/145，评测 5/5（新基线 139/4 固化）。
 
 ### 验收标准
 
@@ -483,12 +492,12 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [completed] 基线勘察与 GitHub 同类项目对比
 - [completed] Phase 0：离线评测基线和护栏
 - [completed] Phase 1：约束完整进入 `/api/plan`
-- [in_progress] Phase 2：事实 Contract、候选评分与选择
+- [completed] Phase 2：事实 Contract、候选评分与选择（2026-09-05 真实验收后关闭）
 - [pending] Phase 2.5：可选工具增强规划脑（agentic 补查）
-- [pending] Phase 3：预算反馈循环与全局质量门
+- [completed] Phase 3：预算反馈循环与全局质量门（2026-09-05）
 - [pending] Phase 4：结构化追问、计划版本与 Diff
 - [pending] Phase 5：持久化、真实进度与产品化质量门
-- [pending] 工程债务 D1-D13（见"工程债务台账"；D2/D11/D12 为 Phase 2 收尾前置，D1 为 Phase 2.5 前置）
+- [pending] 工程债务 D1/D3-D10（D2/D11/D12/D13 已关闭；D1 为 Phase 2.5 前置）
 
 ### Phase 2 当前步骤
 

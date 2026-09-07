@@ -246,6 +246,16 @@ MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时
 - 观察项 2：真实 DeepSeek 体检路径下 `quality_review.constraints=0`（约束逐项评审只在规则体检路径产出）——与 Phase 1 规则路径行为不一致，建议随 Phase 3/追问改造统一。
 - 观察项 3：本地 fallback 酒店「示例」区域候选进入 contracts——名称显式标注示例、非编造真实酒店，可接受；如需更严可在构建器过滤 `not_configured` 酒店。
 
+## Phase 3 预算反馈循环（2026-09-05）
+
+- 新增 `budget_optimizer.py`：确定性反馈循环（零 LLM/工具调用），超预算时按优先级执行三杠杆——同片区高价项替换（activity+food，候选经 `_cost_metadata` 同口径预测重建成本，**免费候选可替换付费项**）、住宿 `budget_strategy=cheapest_first`（与 `_average_cost_by_source` 同一 source 优先级框架内取 min，不按 selection.status 过滤）、非硬性付费活动删减（`_retime_day_items` 重排时间槽）。每动作记录 before/after/saved/reason；轮上限 2；deepcopy 快照异常回滚。
+- 插入位置：评审后、市内路线重建前。临时预算用 movement_count 口径（实测比最终口径高估 5-15 倍），循环决策只消费「每轮节省量 vs 剩余缺口」相对量；金额统一标注"调整期估算"；最终 budget 仍由 BudgetAgent 按真实 segments 计算。
+- 硬质量门 `quality_gate.py`：返程后住宿串台、item 总量下限、硬约束预算↔最终 verdict、单日时长粗检。违规写独立字段 `quality_review.gate_violations`——不动 issues（前端 slice(0,3) 截断 + phase1 契约）、不改 source（metrics fallback 语义）。
+- 用户决策：循环默认开启（`TRAVELMIND_BUDGET_LOOP=on`，off 为回滚开关）；评测 141 调用断言重定为实测 139（删项减少 2 次 judge_route 对），指标重定基线并生成 phase3_report 对照。
+- 评测对照（Phase 2 → Phase 3）：预算偏差 **0.6230 → 0.4897**；low_budget ~1.9 → 0.854（跨城+最低酒店已超 500 目标，无法完全达标——验收口径为"真实调整+缺口可解释+偏差下降"）；return_transfer_isolation 2107→1601 转预算内、串台率保持 0；fallback 率与污染率不变；真实地点绑定率 0.5940→0.5903（微调）；硬约束满足率 0.7500 不变。
+- 前端与导出：预算卡「预算自动调整」折叠块（动作/缺口/口径）、体检「硬门槛提醒」区块、导出 Markdown 与后端 markdown_writer 同步调整段；新字段经快照整包克隆自动持久化。
+- 验证：新增 21 个测试（优化器 10、门禁 6、run() 级 4、eval 对照 1）；全量回归 145/145、评测 5/5（139/4 固化）、py_compile/`node --check`/`git diff --check` 通过。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
