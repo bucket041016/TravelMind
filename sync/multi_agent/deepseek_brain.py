@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel
 
-from .deepseek_contracts import HotelPriceOutput, PlanOutput, ReviewOutput, RouteJudgement
+from .deepseek_contracts import HotelPriceOutput, PlanOutput, RefineOutput, ReviewOutput, RouteJudgement
 
 
 class DeepSeekInvocationError(ValueError):
@@ -218,6 +218,47 @@ class DeepSeekPlanningBrainAgent:
             return self._degraded(exc, "review")
 
         return {"llm_status": "used", "reason": "", "attempt_count": attempt_count, "review": parsed}
+
+    def parse_refine_ops(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """把用户追问解析为计划增量操作（Phase 4）；降级语义与四个脑方法一致。"""
+        if not self.model:
+            return self._unavailable("operations", [])
+
+        system_prompt = (
+            "你是 TravelMind 的追问解析器。你只基于输入中的计划摘要和候选池，把用户追问解析为结构化增量操作。"
+            "真实地点只能引用输入候选池中的 candidate_id，不能编造地点、价格、车次或库存；"
+            "item 引用必须使用输入 items 提供的 item_id，退化时使用 item_title。"
+            "语义无法确定或用户只是咨询时，用 action=answer_only 并在 answer 中说明或提问，不要猜测执行。"
+            "只输出 JSON，不要 Markdown，不要解释。"
+        )
+        user_prompt = (
+            "请把用户追问解析为增量操作，schema 如下：\n"
+            '{"operations": [{"action": "replace_place|remove_item|add_activity|adjust_budget|change_pace|change_hotel_strategy|answer_only", '
+            '"day": 1, "item_id": "", "item_title": "", "candidate_id": "", "new_title": "", '
+            '"budget": 0, "pace": "", "hotel_strategy": "", "slot": "", "reason": "", "needs_confirmation": false}], "answer": ""}\n'
+            "判定规则：\n"
+            "1. 把某天整体换成某种场景（如室内/户外）→ 对该天每个需要更换的 activity 逐个发 replace_place，餐饮一般不动；\n"
+            "2. 预算改为 X → adjust_budget（budget=X）；\n"
+            "3. 节奏快慢 → change_pace（轻松|标准|紧凑）；\n"
+            "4. 住宿位置偏好 → change_hotel_strategy（近景点|近地铁枢纽|近商圈）；\n"
+            "5. 增加/删除具体地点 → add_activity/remove_item（引用 item_id，删除也可用 item_title）；\n"
+            "6. 纯咨询、闲聊、无法定位到具体日期或地点 → answer_only，把回答写进 answer。\n"
+            "要求：每次最多 12 条操作；候选不得与行程中已安排地点重复；不要输出修改后的完整行程。\n\n"
+            f"输入数据：\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+        try:
+            parsed, attempt_count = self._invoke_parsed(system_prompt, user_prompt, RefineOutput)
+        except DeepSeekInvocationError as exc:
+            return self._degraded(exc, "operations", [])
+
+        operations = parsed.get("operations") if isinstance(parsed.get("operations"), list) else []
+        return {
+            "llm_status": "used",
+            "reason": "",
+            "attempt_count": attempt_count,
+            "operations": operations,
+            "answer": str(parsed.get("answer") or ""),
+        }
 
     @staticmethod
     def _message_content_to_text(content: Any) -> str:

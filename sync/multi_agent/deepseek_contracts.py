@@ -163,10 +163,86 @@ class ReviewOutput(BaseModel):
         return self
 
 
+class RefineOperation(BaseModel):
+    """单条追问增量操作；action 缺失即校验失败触发重试。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: str = Field(..., description="replace_place|remove_item|add_activity|adjust_budget|change_pace|change_hotel_strategy|answer_only")
+    day: int | None = Field(default=None, description="结构操作的日期，1-based")
+    item_id: str = Field(default="", description="目标 item id（优先定位键）")
+    item_title: str = Field(default="", description="目标 item 标题（退化定位键）")
+    candidate_id: str = Field(default="", description="replace/add 的候选 id，只能引用输入候选池")
+    new_title: str = Field(default="", description="add_activity 无候选时的泛化标题")
+    budget: int | None = Field(default=None, description="adjust_budget 的目标预算")
+    pace: str = Field(default="", description="change_pace：轻松|标准|紧凑")
+    hotel_strategy: str = Field(default="", description="change_hotel_strategy：近景点|近地铁枢纽|近商圈")
+    slot: str = Field(default="", description="add_activity 可选时间槽")
+    reason: str = Field(default="")
+    needs_confirmation: bool = Field(default=False, description="语义不确定标记；后端视为不执行")
+
+    _v_day = field_validator("day", mode="before")(_coerce_day)
+    _v_needs_confirmation = field_validator("needs_confirmation", mode="before")(_coerce_bool)
+
+    @field_validator("budget", mode="before")
+    @classmethod
+    def _v_budget(cls, value: Any) -> Any:
+        if value is None or isinstance(value, bool):
+            return value
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return value
+        if number <= 0:
+            raise ValueError("budget 必须 > 0")
+        return number
+
+    @field_validator("pace", mode="before")
+    @classmethod
+    def _v_pace(cls, value: Any) -> Any:
+        text = str(value or "").strip()
+        if text and text not in {"轻松", "标准", "紧凑"}:
+            raise ValueError("pace 必须是 轻松|标准|紧凑")
+        return text
+
+    @field_validator("hotel_strategy", mode="before")
+    @classmethod
+    def _v_hotel_strategy(cls, value: Any) -> Any:
+        text = str(value or "").strip()
+        if text and text not in {"近景点", "近地铁枢纽", "近商圈"}:
+            raise ValueError("hotel_strategy 必须是 近景点|近地铁枢纽|近商圈")
+        return text
+
+
+class RefineOutput(BaseModel):
+    """parse_refine_ops 的顶层输出：操作列表或纯文本回答。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    operations: list[RefineOperation] = Field(..., description="增量操作列表，最多 12 条")
+    answer: str = Field(default="", description="answer_only 或补充说明文本")
+
+    @field_validator("operations", mode="before")
+    @classmethod
+    def _require_list(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            raise ValueError("operations 必须是列表")
+        if len(value) > 12:
+            raise ValueError("operations 最多 12 条")
+        return value
+
+    @model_validator(mode="after")
+    def _require_answer_when_no_operations(self):
+        if not self.operations and not self.answer.strip():
+            raise ValueError("没有操作时必须提供 answer 文本回答")
+        return self
+
+
 # 方法名 -> 对应输出契约，供 deepseek_brain._parse_json_object 统一按模型解析。
 MODEL_BY_METHOD: dict[str, type[BaseModel]] = {
     "plan": PlanOutput,
     "estimate_hotel_prices": HotelPriceOutput,
     "judge_route": RouteJudgement,
     "review_itinerary": ReviewOutput,
+    "parse_refine_ops": RefineOutput,
 }

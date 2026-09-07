@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -20,7 +21,9 @@ except ModuleNotFoundError:
 
 from .base_agent import MCPToolbox
 from .budget_optimizer import budget_loop_enabled, run_budget_feedback_loop
+from .plan_version import build_explanation, compute_diff, next_version
 from .quality_gate import run_hard_gates
+from .refine_parser import apply_operations, build_refine_payload, locate_targets
 from .constants import (
     CITY_CENTER_COORDS,
     CITY_DISTANCE_KM,
@@ -319,6 +322,124 @@ class StructuredTravelPlanner:
             "trace": trace,
             "planning_mode": planning_mode,
             "llm_status": llm_status,
+        }
+
+    def refine_plan(self, plan: dict[str, Any], message: str) -> dict[str, Any]:
+        """结构化追问（Phase 4）：把追问应用为计划增量操作并重算派生数据。
+
+        服务端无状态：plan 由调用方回传；失败时返回 status=failed 且 plan 原样，
+        不覆盖调用方的当前版本。run() 与 /api/plan 响应结构不受本方法影响。
+        """
+        required = ["preferences", "intercity_transport", "local_transport", "hotels", "pois", "weather", "itinerary_days"]
+        if not isinstance(plan, dict) or any(not plan.get(key) for key in required):
+            return {
+                "status": "failed",
+                "reason": "计划缺少必要事实字段，无法增量修改",
+                "plan": plan if isinstance(plan, dict) else {},
+                "diff": None,
+                "markdown": plan.get("markdown", "") if isinstance(plan, dict) else "",
+            }
+
+        # 状态恢复：直接使用 canonical prefs，禁止重跑 _normalize_preferences
+        # （其 mode 映射只认中文标签，会把 "flight" 等 code 静默重置为 defaults）。
+        prefs = dict(plan["preferences"])
+        prefs["preferenceProfile"] = self._normalize_preference_profile(prefs.get("preferenceProfile"))
+        prefs["days"] = self._bounded_int(prefs.get("days"), 2, 1, 14)
+        prefs["travelers"] = self._bounded_int(prefs.get("travelers"), 1, 1, 20)
+        prefs["budget"] = self._optional_int(prefs.get("budget"))
+        routes = plan["intercity_transport"]
+        local_transport = plan["local_transport"]
+        hotels = plan["hotels"]
+        pois = plan["pois"]
+        weather = plan["weather"]
+        weather_advice = plan.get("weather_advice") or {}
+        itinerary_days = plan["itinerary_days"]
+
+        payload = build_refine_payload(plan)
+        payload["message"] = str(message or "")
+        parsed = self.deepseek_brain.parse_refine_ops(payload)
+        llm_status = parsed.get("llm_status") if isinstance(parsed, dict) else "unavailable"
+        if llm_status != "used":
+            return {
+                "status": "failed",
+                "reason": parsed.get("reason", "追问解析失败") if isinstance(parsed, dict) else "追问解析失败",
+                "llm_status": llm_status,
+                "plan": plan,
+                "diff": None,
+                "markdown": plan.get("markdown", ""),
+            }
+        ops = parsed.get("operations") or []
+        answer = str(parsed.get("answer") or "")
+
+        old_days = copy.deepcopy(itinerary_days)
+        old_budget = copy.deepcopy(plan.get("budget") or {})
+        old_prefs = copy.deepcopy(prefs)
+
+        targets = locate_targets(ops, itinerary_days)
+        applied, skipped = apply_operations(itinerary_days, prefs, pois, ops, targets)
+
+        if not applied:
+            return {
+                "status": "ok",
+                "changed": False,
+                "plan": plan,
+                "diff": compute_diff({"days": old_days, "budget": old_budget, "prefs": old_prefs}, plan),
+                "explanation": build_explanation([], skipped, None, answer),
+                "markdown": plan.get("markdown", ""),
+                "llm_status": llm_status,
+            }
+
+        # 重算尾部：顺序与 run() tail 一致，但用 rule 体检替代 LLM 体检——
+        # 防止 repaired_plan 覆写用户刚应用的操作。
+        self._apply_preference_safety_to_itinerary(prefs, itinerary_days)
+        self._assign_day_primary_clusters(itinerary_days)
+        budget_adjustments = self._run_budget_feedback_loop(prefs, routes, local_transport, hotels, itinerary_days, pois)
+        local_transport = self._build_local_transport_segments(
+            prefs, local_transport, itinerary_days, pois, toolbox=self.toolbox, deepseek_brain=self.deepseek_brain
+        )
+        map_data = self._build_map(
+            plan.get("plan_id") or f"tm-{uuid4().hex[:10]}", prefs, itinerary_days, pois, hotels
+        )
+        budget = self._build_budget(prefs, routes, local_transport, hotels, pois, itinerary_days)
+        if isinstance(budget, dict) and isinstance(budget_adjustments, dict):
+            budget["adjustments"] = budget_adjustments
+        quality_review = self._rule_quality_review(prefs, itinerary_days)
+        if budget_loop_enabled():
+            gate_result = self._run_hard_gates(prefs, itinerary_days, budget)
+            violations = gate_result.get("violations") if isinstance(gate_result, dict) else []
+            if violations:
+                quality_review["gate_violations"] = violations
+        markdown = self._build_markdown(
+            prefs, routes, local_transport, hotels, weather, weather_advice, pois, budget, itinerary_days
+        )
+
+        new_plan = {
+            **plan,
+            "preferences": prefs,
+            "intercity_transport": routes,
+            "local_transport": local_transport,
+            "hotels": hotels,
+            "pois": pois,
+            "map": map_data,
+            "budget": budget,
+            "budget_adjustments": budget_adjustments,
+            "itinerary_days": itinerary_days,
+            "quality_review": quality_review,
+            "markdown": markdown,
+            "trace": [],
+        }
+        next_version(new_plan, message, applied, skipped)
+        diff = compute_diff({"days": old_days, "budget": old_budget, "prefs": old_prefs}, new_plan)
+        explanation = build_explanation(applied, skipped, budget_adjustments, answer)
+        return {
+            "status": "ok",
+            "changed": True,
+            "plan": new_plan,
+            "diff": diff,
+            "explanation": explanation,
+            "markdown": markdown,
+            "llm_status": llm_status,
+            "review_source": "rule",
         }
 
     def _record(

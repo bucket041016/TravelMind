@@ -194,6 +194,11 @@ class PlanRequest(BaseModel):
     softPreferences: list[str] = Field(default_factory=list)
 
 
+class RefinePlanRequest(BaseModel):
+    plan: dict[str, object]
+    message: str
+
+
 app = FastAPI(title="TravelMind Agent Demo", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -455,6 +460,25 @@ def plan_trip(request: PlanRequest):
         else:
             payload = request.dict()
         return planner.run(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/refine-plan")
+def refine_plan(request: RefinePlanRequest):
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="message 不能为空")
+    if os.getenv("TRAVELMIND_REFINE", "on").strip().lower() in {"off", "0", "false", "no"}:
+        raise HTTPException(status_code=503, detail="结构化追问已通过 TRAVELMIND_REFINE=off 关闭")
+
+    required = ["preferences", "intercity_transport", "local_transport", "hotels", "pois", "weather", "itinerary_days"]
+    missing = [key for key in required if not request.plan.get(key)]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"计划缺少必要字段：{', '.join(missing)}")
+
+    try:
+        planner = get_structured_planner()
+        return planner.refine_plan(request.plan, request.message.strip())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

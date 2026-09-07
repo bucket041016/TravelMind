@@ -2330,39 +2330,88 @@ async function loadTools() {
 
 async function sendMessage(message, options = {}) {
   appendMessage("user", message);
-  const pending = appendMessage("assistant", "多 Agent 团队正在拆解需求、并行调用 MCP 工具...", {
-    typing: true,
-  });
+  const pending = appendMessage(
+    "assistant",
+    currentPlanData ? "正在解析追问并增量修改当前计划..." : "多 Agent 团队正在拆解需求、并行调用 MCP 工具...",
+    {
+      typing: true,
+    },
+  );
   followupSendButton.disabled = true;
   if (planButton) {
     planButton.disabled = true;
-    planButton.textContent = "规划中...";
+    planButton.textContent = "处理中...";
   }
   if (options.showProgress) startPlanningProgress();
+  const setBubble = (html) => {
+    pending.querySelector(".bubble").classList.remove("typing");
+    pending.querySelector(".bubble").innerHTML = html;
+  };
 
   try {
-    const response = await fetch("/api/multi-agent-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text);
+    // 结构化追问（Phase 4）：有当前计划时优先尝试 /api/refine-plan；
+    // status=ok+changed 更新计划，ok+无变更只回答，失败/不可用自动回退旧链路。
+    let handled = false;
+    if (currentPlanData) {
+      try {
+        const refineResponse = await fetch("/api/refine-plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan: currentPlanData, message }),
+        });
+        if (refineResponse.ok) {
+          const data = await refineResponse.json();
+          if (data.status === "ok" && data.changed) {
+            currentPlanData = normalizePlanData(clonePlan(data.plan));
+            currentMarkdown = data.markdown || buildMarkdownFromPlan(currentPlanData);
+            budgetAdjusted = false;
+            editMode = false;
+            renderPlanResult(currentPlanData);
+            renderMarkdownResult(currentMarkdown);
+            const badge = currentPlanData.version ? `计划已更新到 v${currentPlanData.version}。` : "计划已更新。";
+            const text = `${badge}\n\n${data.explanation || ""}`;
+            setBubble(renderMarkdown(text));
+            recordFollowupMessage("assistant", text, { skipSave: true });
+            setTrace([], { skipSave: true });
+            if (options.showProgress) completePlanningProgress();
+            handled = true;
+          } else if (data.status === "ok") {
+            const text = data.explanation || "本次未对计划做修改。";
+            setBubble(renderMarkdown(text));
+            recordFollowupMessage("assistant", text, { skipSave: true });
+            setTrace([], { skipSave: true });
+            handled = true;
+          }
+          // status === "failed"：保持未处理，回退旧链路
+        }
+      } catch (refineError) {
+        // refine 不可用（网络/503），回退旧链路
+      }
     }
 
-    const data = await response.json();
-    const answer = data.answer || "没有生成回答。";
-    pending.querySelector(".bubble").classList.remove("typing");
-    pending.querySelector(".bubble").innerHTML = renderMarkdown(answer);
-    recordFollowupMessage("assistant", answer, { skipSave: true });
-    setTrace(data.trace, { skipSave: true });
-    if (options.showProgress) completePlanningProgress();
+    if (!handled) {
+      const legacyResponse = await fetch("/api/multi-agent-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+
+      if (!legacyResponse.ok) {
+        const text = await legacyResponse.text();
+        throw new Error(text);
+      }
+
+      const data = await legacyResponse.json();
+      const answer = data.answer || "没有生成回答。";
+      const labeled = currentPlanData ? `（旧链路文本回答，未修改当前计划）\n\n${answer}` : answer;
+      setBubble(renderMarkdown(labeled));
+      recordFollowupMessage("assistant", labeled, { skipSave: true });
+      setTrace(data.trace, { skipSave: true });
+      if (options.showProgress) completePlanningProgress();
+    }
   } catch (error) {
     const failureMessage = `请求失败：${error.message}`;
-    pending.querySelector(".bubble").classList.remove("typing");
-    pending.querySelector(".bubble").innerHTML = renderMarkdown(failureMessage);
+    setBubble(renderMarkdown(failureMessage));
     recordFollowupMessage("assistant", failureMessage, { skipSave: true });
     setTrace([], { skipSave: true });
     if (options.showProgress) failPlanningProgress();
