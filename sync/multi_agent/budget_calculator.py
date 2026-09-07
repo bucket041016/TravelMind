@@ -30,7 +30,11 @@ def _build_budget(
     rooms = max(1, (travelers + 1) // 2)
 
     route_total, route_source = _estimate_intercity_cost(prefs, routes)
-    hotel_unit, hotel_source = _average_cost_by_source(hotels.get("candidates", []))
+    budget_strategy = str(hotels.get("budget_strategy") or "")
+    if budget_strategy == "cheapest_first":
+        hotel_unit, hotel_source = _cheapest_cost_by_source(hotels.get("candidates", []))
+    else:
+        hotel_unit, hotel_source = _average_cost_by_source(hotels.get("candidates", []))
     if hotel_unit:
         hotel_total = round(hotel_unit * nights * rooms)
     else:
@@ -66,7 +70,11 @@ def _build_budget(
     }
     basis = [
         f"跨城交通按推荐方案「{MODE_LABELS.get(routes.get('recommended'), routes.get('recommended', ''))}」估算。",
-        f"住宿按 {nights} 晚、{rooms} 间房估算，优先使用高德酒店 POI 参考消费。",
+        (
+            f"住宿按最低价候选估算（预算自动调整策略），{nights} 晚、{rooms} 间房。"
+            if budget_strategy == "cheapest_first"
+            else f"住宿按 {nights} 晚、{rooms} 间房估算，优先使用高德酒店 POI 参考消费。"
+        ),
         f"餐饮按最终行程中的 {len(food_items)} 个餐饮项目估算，优先使用高德餐厅/特色店铺人均。",
         f"门票/体验按最终行程中的 {len(activity_items)} 个活动项目估算；有高德参考消费或 AI 正价区间时计入，缺少可靠门票价时按无门票/免费项目默认 0 元。",
         f"市内交通按每日活动之间约 {movement_count} 次移动估算，结合推荐交通方式计算。",
@@ -189,6 +197,20 @@ def _average_cost_by_source(items: list[dict[str, Any]]) -> tuple[float | None, 
                 costs.append(float(raw_cost))
         if costs:
             return sum(costs) / len(costs), ("category_rule" if source == "rule_fallback" else source)
+    return None, "unknown_price"
+
+def _cheapest_cost_by_source(items: list[dict[str, Any]]) -> tuple[float | None, str]:
+    """与 _average_cost_by_source 同一 source 优先级框架，在最高优先非空组内取最低价。"""
+    for source in ["amap_cost", "ai_price_range", "category_rule", "rule_fallback"]:
+        costs = []
+        for item in items:
+            if item.get("cost_source") != source:
+                continue
+            raw_cost = item.get("cost") if source == "amap_cost" else item.get("cost_estimate")
+            if isinstance(raw_cost, (int, float)) and raw_cost > 0:
+                costs.append(float(raw_cost))
+        if costs:
+            return min(costs), ("category_rule" if source == "rule_fallback" else source)
     return None, "unknown_price"
 
 def _activity_count(itinerary_days: list[dict[str, Any]]) -> int:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 try:
     from .fixtures import build_scenarios
@@ -8,6 +10,8 @@ try:
 except ImportError:
     from fixtures import build_scenarios
     from run_baseline import render_markdown, run_all, run_scenario
+
+from sync.multi_agent.structured_planner import StructuredTravelPlanner
 
 
 class TravelMindPhase0EvaluationTests(unittest.TestCase):
@@ -44,8 +48,34 @@ class TravelMindPhase0EvaluationTests(unittest.TestCase):
         self.assertGreater(by_name["dependency_fallback"]["metrics"]["fallback_rate"], 0.0)
         self.assertEqual(by_name["return_transfer_isolation"]["metrics"]["return_hotel_contamination_rate"], 0.0)
         self.assertEqual(report["aggregate"]["scenario_count"], 10)
-        self.assertEqual(report["aggregate"]["total_calls"], 141)
+        # Phase 3 预算反馈循环开启后的重定基线：删项减少 2 次 judge_route 调用（141 -> 139）。
+        self.assertEqual(report["aggregate"]["total_calls"], 139)
         self.assertEqual(report["aggregate"]["total_tool_failures"], 4)
+
+    def test_phase3_budget_loop_improves_low_budget(self):
+        """预算反馈循环开启时 low_budget 应发生真实调整且偏差低于关闭态。"""
+        scenario = next(item for item in build_scenarios() if item.name == "low_budget")
+
+        def _run_with(flag: str) -> dict:
+            planner = StructuredTravelPlanner("fixture://travelmind-phase3")
+            planner.toolbox = FixtureToolbox(scenario)
+            planner.deepseek_brain = FixtureDeepSeekBrain(scenario)
+            with patch.dict(os.environ, {"TRAVELMIND_BUDGET_LOOP": flag}):
+                return planner.run(scenario.payload)
+
+        try:
+            from .fixtures import FixtureDeepSeekBrain, FixtureToolbox
+        except ImportError:
+            from fixtures import FixtureDeepSeekBrain, FixtureToolbox
+
+        on_plan = _run_with("on")
+        off_plan = _run_with("off")
+        self.assertTrue(on_plan["budget_adjustments"]["applied"])
+        self.assertLess(
+            on_plan["budget"]["total"],
+            off_plan["budget"]["total"],
+        )
+        self.assertLessEqual(on_plan["budget_adjustments"]["rounds_used"], 2)
 
     def test_report_renderer_labels_phase2_suite_separately(self):
         report = {

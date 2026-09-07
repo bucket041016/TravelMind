@@ -1,0 +1,1026 @@
+{
+  "suite": "travelmind-phase3-budget-loop",
+  "version": 1,
+  "scenarios": [
+    {
+      "scenario": "standard_weekend",
+      "duration_ms": 33,
+      "metrics": {
+        "real_place_binding_rate": 0.7143,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.3272,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "max_transfer_minutes",
+          "passed": true,
+          "detail": "over_tolerance_rate=0.000"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1211,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "family_budget",
+      "duration_ms": 12,
+      "metrics": {
+        "real_place_binding_rate": 0.6,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 0.5,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 1.4467,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "max_transfer_minutes",
+          "passed": true,
+          "detail": "over_tolerance_rate=0.000"
+        },
+        {
+          "name": "budget_must_be_within",
+          "passed": false,
+          "detail": "over_budget"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 4404,
+        "target": 1800,
+        "verdict": "over_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "rainy_indoor_preference",
+      "duration_ms": 9,
+      "metrics": {
+        "real_place_binding_rate": 0.7143,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.3294,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "max_transfer_minutes",
+          "passed": true,
+          "detail": "over_tolerance_rate=0.000"
+        },
+        {
+          "name": "free_text_preserved",
+          "passed": true,
+          "detail": "preferences contains raw constraint"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1207,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "low_budget",
+      "duration_ms": 9,
+      "metrics": {
+        "real_place_binding_rate": 0.7143,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 0.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.854,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "budget_must_be_within",
+          "passed": false,
+          "detail": "over_budget"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 927,
+        "target": 500,
+        "verdict": "over_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "slow_pace",
+      "duration_ms": 6,
+      "metrics": {
+        "real_place_binding_rate": 0.6667,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.4183,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "max_real_places_per_day",
+          "passed": true,
+          "detail": "counts=[3, 1], limit=3"
+        },
+        {
+          "name": "free_text_preserved",
+          "passed": true,
+          "detail": "preferences contains raw constraint"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1047,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 8,
+        "tool_failures": 0,
+        "brain": 5,
+        "total": 13
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "tight_transfer_tolerance",
+      "duration_ms": 9,
+      "metrics": {
+        "real_place_binding_rate": 0.7143,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 0.0,
+        "route_over_tolerance_rate": 0.5,
+        "budget_deviation": 0.1833,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.1667
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "max_transfer_minutes",
+          "passed": false,
+          "detail": "over_tolerance_rate=0.500"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": true
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1470,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "return_transfer_isolation",
+      "duration_ms": 10,
+      "metrics": {
+        "real_place_binding_rate": 0.6364,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.1106,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "no_return_lodging_contamination",
+          "passed": true,
+          "detail": "contamination_rate=0.000"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1601,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 10,
+        "tool_failures": 0,
+        "brain": 7,
+        "total": 17
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "duplicate_candidate",
+      "duration_ms": 6,
+      "metrics": {
+        "real_place_binding_rate": 0.4286,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.3739,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1127,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 8,
+        "tool_failures": 0,
+        "brain": 5,
+        "total": 13
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "dependency_fallback",
+      "duration_ms": 2,
+      "metrics": {
+        "real_place_binding_rate": 0.0,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.5267,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.8333
+      },
+      "hard_constraint_checks": [],
+      "fallback_components": {
+        "weather": true,
+        "pois": true,
+        "hotels": true,
+        "planning": true,
+        "review": true,
+        "local_routes": false
+      },
+      "planning_mode": "rule_fallback",
+      "llm_status": "unavailable",
+      "budget": {
+        "total": 568,
+        "target": 1200,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 4,
+        "tool_failures": 4,
+        "brain": 2,
+        "total": 6
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "error"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "error"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "error"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "error"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "unavailable"
+        },
+        {
+          "name": "DayPlannerAgent 规则降级行程",
+          "status": "rule_fallback"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "unavailable"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "scenario": "free_text_hard_constraint",
+      "duration_ms": 7,
+      "metrics": {
+        "real_place_binding_rate": 0.7143,
+        "duplicate_place_rate": 0.0,
+        "hard_constraint_satisfaction": 1.0,
+        "route_over_tolerance_rate": 0.0,
+        "budget_deviation": 0.3272,
+        "return_hotel_contamination_rate": 0.0,
+        "fallback_rate": 0.0
+      },
+      "hard_constraint_checks": [
+        {
+          "name": "free_text_preserved",
+          "passed": true,
+          "detail": "preferences contains raw constraint"
+        },
+        {
+          "name": "no_night_activity",
+          "passed": true,
+          "detail": "count=0"
+        }
+      ],
+      "fallback_components": {
+        "weather": false,
+        "pois": false,
+        "hotels": false,
+        "planning": false,
+        "review": false,
+        "local_routes": false
+      },
+      "planning_mode": "deepseek_hybrid",
+      "llm_status": "used",
+      "budget": {
+        "total": 1211,
+        "target": 1800,
+        "verdict": "within_budget"
+      },
+      "calls": {
+        "tool": 9,
+        "tool_failures": 0,
+        "brain": 6,
+        "total": 15
+      },
+      "trace_statuses": [
+        {
+          "name": "WeatherAgent 天气与出行建议",
+          "status": "success"
+        },
+        {
+          "name": "WeatherAdviceAgent 穿衣防晒建议",
+          "status": "success"
+        },
+        {
+          "name": "IntercityTransportAgent 跨城主交通",
+          "status": "success"
+        },
+        {
+          "name": "POIAgent 景点美食",
+          "status": "success"
+        },
+        {
+          "name": "HotelAgent 住宿匹配",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内交通",
+          "status": "success"
+        },
+        {
+          "name": "DeepSeekPlanningBrainAgent 智能规划脑",
+          "status": "used"
+        },
+        {
+          "name": "ItineraryReviewAgent 智能体检",
+          "status": "used"
+        },
+        {
+          "name": "BudgetOptimizerAgent 调整反馈循环",
+          "status": "success"
+        },
+        {
+          "name": "LocalMobilityAgent 目的地内路线",
+          "status": "success"
+        },
+        {
+          "name": "MapAgent 景点地图",
+          "status": "success"
+        },
+        {
+          "name": "BudgetAgent 高德参考预算",
+          "status": "success"
+        },
+        {
+          "name": "QualityGateAgent 全局质量门",
+          "status": "success"
+        },
+        {
+          "name": "WriterAgent 行程生成",
+          "status": "success"
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "scenario_count": 10,
+    "averages": {
+      "real_place_binding_rate": 0.5903,
+      "duplicate_place_rate": 0.0,
+      "hard_constraint_satisfaction": 0.75,
+      "route_over_tolerance_rate": 0.05,
+      "budget_deviation": 0.4897,
+      "return_hotel_contamination_rate": 0.0,
+      "fallback_rate": 0.1
+    },
+    "planning_modes": {
+      "deepseek_hybrid": 9,
+      "rule_fallback": 1
+    },
+    "total_calls": 139,
+    "total_tool_failures": 4
+  }
+}

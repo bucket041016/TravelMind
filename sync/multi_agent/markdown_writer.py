@@ -79,6 +79,32 @@ def _build_markdown(
             f"- 预计总计：{budget.get('total') or '待校准'} 元；目标预算：{budget.get('target') or '未指定'} 元。",
             f"- 建议：{budget.get('advice', '')}",
             *[f"- 依据：{item}" for item in budget.get("basis", [])],
+        ]
+    )
+    adjustments = budget.get("adjustments")
+    if isinstance(adjustments, dict) and adjustments.get("enabled") is not False and adjustments.get("applied"):
+        lines.extend(["", "### 预算自动调整"])
+        if adjustments.get("gap_before") is not None:
+            lines.append(
+                f"- 缺口（调整期估算）：{adjustments.get('gap_before')} 元 → {adjustments.get('gap_after') or 0} 元，"
+                f"共 {adjustments.get('rounds_used') or 0} 轮，合计节省约 {adjustments.get('total_saved') or 0} 元。"
+            )
+        lever_labels = {"replace": "同片区替换", "hotel_strategy": "住宿策略", "trim": "删减活动"}
+        for action in adjustments.get("applied", [])[:8]:
+            lever = lever_labels.get(action.get("lever"), action.get("lever") or "调整")
+            day_text = f"（第 {action.get('day')} 天）" if action.get("day") else ""
+            before = action.get("before") or {}
+            after = action.get("after") or {}
+            after_text = f"{after.get('title') or '移除'}（{after.get('cost') or 0} 元）" if after.get("title") else "移除"
+            lines.append(
+                f"- {lever}{day_text}：{before.get('title') or ''}（{before.get('cost') or 0} 元）→ {after_text}，"
+                f"节省 {action.get('saved') or 0} 元。{action.get('reason') or ''}"
+            )
+        if adjustments.get("note"):
+            lines.append(f"- 说明：{adjustments.get('note')}")
+
+    lines.extend(
+        [
             "",
             "### 说明",
             "- 当前未接入真实航班/酒店库存供应商，不展示虚构航班号、实时房价或余票。",

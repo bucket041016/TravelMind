@@ -60,7 +60,11 @@ def render_markdown(report: dict[str, Any]) -> str:
     suite = str(report.get("suite") or "")
     is_phase1 = "phase1" in suite
     is_phase2 = "phase2" in suite
-    if is_phase2:
+    is_phase3 = "phase3" in suite
+    if is_phase3:
+        title = "TravelMind Phase 3 预算反馈循环评测"
+        intro = "本报告使用 Fake MCP 和 Fake DeepSeek fixture，未访问外部网络、`.env` 或真实供应商；预算反馈循环默认开启（TRAVELMIND_BUDGET_LOOP=on），用于观察预算调整后的指标变化。"
+    elif is_phase2:
         title = "TravelMind Phase 2 候选 Contract 与排序评测"
         intro = "本报告使用 Fake MCP 和 Fake DeepSeek fixture，未访问外部网络、`.env` 或真实供应商；用于观察候选 Contract 接入后的变化。"
     elif is_phase1:

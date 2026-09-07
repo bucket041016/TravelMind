@@ -19,6 +19,8 @@ except ModuleNotFoundError:
     from sync.mcp_tools_adapter import MCPToolAdapter
 
 from .base_agent import MCPToolbox
+from .budget_optimizer import budget_loop_enabled, run_budget_feedback_loop
+from .quality_gate import run_hard_gates
 from .constants import (
     CITY_CENTER_COORDS,
     CITY_DISTANCE_KM,
@@ -130,6 +132,7 @@ from .budget_calculator import (
     _average_cost_by_source,
     _build_budget,
     _category_image_url,
+    _cheapest_cost_by_source,
     _combined_segment_source,
     _combined_source,
     _estimate_itinerary_local_transport_cost,
@@ -243,6 +246,12 @@ class StructuredTravelPlanner:
             quality_review = review_result.get("quality_review") or self._rule_quality_review(prefs, itinerary_days)
         else:
             quality_review = self._rule_quality_review(prefs, itinerary_days)
+        budget_adjustments = self._record(
+            trace,
+            "BudgetOptimizerAgent 调整反馈循环",
+            prefs,
+            lambda: self._run_budget_feedback_loop(prefs, routes, local_transport, hotels, itinerary_days, pois),
+        )
         local_transport = self._record(
             trace,
             "LocalMobilityAgent 目的地内路线",
@@ -261,6 +270,18 @@ class StructuredTravelPlanner:
             prefs,
             lambda: self._build_budget(prefs, routes, local_transport, hotels, pois, itinerary_days),
         )
+        if budget_loop_enabled():
+            gate_result = self._record(
+                trace,
+                "QualityGateAgent 全局质量门",
+                prefs,
+                lambda: self._run_hard_gates(prefs, itinerary_days, budget),
+            )
+            gate_violations = gate_result.get("violations") if isinstance(gate_result, dict) else []
+            if gate_violations and isinstance(quality_review, dict):
+                quality_review["gate_violations"] = gate_violations
+        if isinstance(budget, dict) and isinstance(budget_adjustments, dict):
+            budget["adjustments"] = budget_adjustments
         markdown = self._record(
             trace,
             "WriterAgent 行程生成",
@@ -291,6 +312,7 @@ class StructuredTravelPlanner:
             "pois": pois,
             "candidate_contracts": candidate_contracts,
             "budget": budget,
+            "budget_adjustments": budget_adjustments,
             "itinerary_days": itinerary_days,
             "quality_review": quality_review,
             "markdown": markdown,
@@ -640,12 +662,17 @@ class StructuredTravelPlanner:
     _average_cost_by_source = staticmethod(_average_cost_by_source)
     _build_budget = staticmethod(_build_budget)
     _category_image_url = staticmethod(_category_image_url)
+    _cheapest_cost_by_source = staticmethod(_cheapest_cost_by_source)
     _combined_segment_source = staticmethod(_combined_segment_source)
     _combined_source = staticmethod(_combined_source)
     _estimate_itinerary_local_transport_cost = staticmethod(_estimate_itinerary_local_transport_cost)
     _estimate_local_transport_cost = staticmethod(_estimate_local_transport_cost)
     _itinerary_items_by_category = staticmethod(_itinerary_items_by_category)
     _sum_itinerary_item_cost = staticmethod(_sum_itinerary_item_cost)
+
+    # budget_optimizer / quality_gate（Phase 3）
+    _run_budget_feedback_loop = staticmethod(run_budget_feedback_loop)
+    _run_hard_gates = staticmethod(run_hard_gates)
 
     # itinerary_builder
     _build_deepseek_itinerary_days = _build_deepseek_itinerary_days

@@ -1069,6 +1069,7 @@ function renderQualityReview(review = null) {
   const issues = Array.isArray(review.issues) ? review.issues.filter((item) => item?.message).slice(0, 3) : [];
   const fixes = Array.isArray(review.fixes) ? review.fixes.filter(Boolean).slice(0, 3) : [];
   const constraints = Array.isArray(review.constraints) ? review.constraints.filter((item) => item?.text).slice(0, 8) : [];
+  const gateViolations = Array.isArray(review.gate_violations) ? review.gate_violations.filter((item) => item?.message) : [];
   return `
     <div class="quality-review">
       <div class="quality-head">
@@ -1080,6 +1081,19 @@ function renderQualityReview(review = null) {
           .map(([label, value]) => `<span><em>${escapeHtml(label)}</em>${escapeHtml(value ?? "-")}</span>`)
           .join("")}
       </div>
+      ${
+        gateViolations.length
+          ? `<div class="quality-gate-violations">
+              <h4>硬门槛提醒</h4>
+              ${gateViolations
+                .map(
+                  (violation) =>
+                    `<p class="quality-issue ${escapeHtml(violation.severity || "high")}">${escapeHtml(violation.day ? `第 ${violation.day} 天 · ` : "")}${escapeHtml(issueSeverityLabel(violation.severity))}：${escapeHtml(violation.message)}</p>`,
+                )
+                .join("")}
+            </div>`
+          : ""
+      }
       <div class="quality-columns">
         <div>
           <h4>关键问题</h4>
@@ -1126,6 +1140,51 @@ function constraintStatusLabel(status) {
     violated: "未满足",
     unknown: "待核实",
   }[status] || "待核实";
+}
+
+const BUDGET_LEVER_LABELS = {
+  replace: "同片区替换",
+  hotel_strategy: "住宿策略",
+  trim: "删减活动",
+};
+
+function renderBudgetAdjustments(adjustments) {
+  if (!adjustments || typeof adjustments !== "object" || adjustments.enabled === false) {
+    return "";
+  }
+  const applied = Array.isArray(adjustments.applied) ? adjustments.applied : [];
+  const skipped = Array.isArray(adjustments.skipped) ? adjustments.skipped : [];
+  if (!applied.length && !skipped.length) {
+    return "";
+  }
+  const gapLine =
+    adjustments.gap_before == null
+      ? ""
+      : `<p class="budget-adjust-gap">缺口（调整期估算）：¥${formatMoney(adjustments.gap_before)} → ¥${formatMoney(adjustments.gap_after ?? 0)}${adjustments.rounds_used ? ` · 共 ${adjustments.rounds_used} 轮` : ""}</p>`;
+  const actionLines = applied
+    .map(
+      (action) =>
+        `<p class="budget-adjust-action"><strong>${escapeHtml(BUDGET_LEVER_LABELS[action.lever] || action.lever || "调整")}</strong>${action.day ? ` · 第 ${escapeHtml(action.day)} 天` : ""}：${escapeHtml(action.before?.title || "")}${action.before?.cost != null ? `（¥${formatMoney(action.before.cost)}）` : ""} → ${action.after?.title ? `${escapeHtml(action.after.title)}` : "移除"}${action.after?.cost != null ? `（¥${formatMoney(action.after.cost)}）` : ""}，节省 ¥${formatMoney(action.saved)}。${escapeHtml(action.reason || "")}</p>`,
+    )
+    .join("");
+  const skipLines = skipped
+    .slice(0, 4)
+    .map(
+      (skip) =>
+        `<p class="budget-adjust-skip">${escapeHtml(BUDGET_LEVER_LABELS[skip.lever] || skip.lever || "调整")}${skip.day ? ` · 第 ${escapeHtml(skip.day)} 天` : ""}：${escapeHtml(skip.title || "") ? `${escapeHtml(skip.title)} — ` : ""}${escapeHtml(skip.reason || "")}</p>`,
+    )
+    .join("");
+  return `
+    <details class="inline-details budget-adjust-details">
+      <summary>预算自动调整（${applied.length} 项动作${adjustments.total_saved ? ` · 共省 ¥${formatMoney(adjustments.total_saved)}` : ""}）</summary>
+      <div class="budget-adjust-body">
+        ${gapLine}
+        ${actionLines || "<p>本轮未执行调整动作。</p>"}
+        ${skipLines ? `<h5>已跳过</h5>${skipLines}` : ""}
+        ${adjustments.note ? `<p class="budget-adjust-note">${escapeHtml(adjustments.note)}</p>` : ""}
+      </div>
+    </details>
+  `;
 }
 
 function renderBudget(budget, options = {}) {
@@ -1656,6 +1715,7 @@ function renderPlanResult(data, options = {}) {
             <summary>查看费用构成</summary>
             <div class="budget-breakdown">${renderBudget(data.budget || {}, { compact: true, showTotal: false, showAdvice: false, showSources: false })}</div>
           </details>
+          ${renderBudgetAdjustments(data.budget_adjustments)}
           <p class="signal-note">${escapeHtml(budgetBreakdownSummary(data.budget || {}))}</p>
           <p class="card-footnote">预计金额会随购票、订房和现场消费变化。</p>
         </article>
@@ -2179,10 +2239,26 @@ function buildMarkdownFromPlan(data) {
     (review.constraints || []).slice(0, 8).forEach((constraint) => {
       lines.push(`- 约束${constraintStatusLabel(constraint.status)}：${constraint.text || ""}${constraint.evidence ? `；证据：${constraint.evidence}` : ""}`);
     });
+    (review.gate_violations || []).slice(0, 5).forEach((violation) => {
+      lines.push(`- 硬门槛提醒：${violation.day ? `第 ${violation.day} 天，` : ""}${violation.message || ""}`);
+    });
   }
   lines.push("", "### 预算评估");
   lines.push(`- 预计总计：${data.budget?.total ?? "待校准"} 元；目标预算：${data.budget?.target ?? "未指定"} 元。`);
   lines.push(`- 建议：${data.budget?.advice || ""}`);
+  const adjustments = data.budget_adjustments || data.budget?.adjustments;
+  if (adjustments?.enabled !== false && Array.isArray(adjustments?.applied) && adjustments.applied.length) {
+    lines.push("", "### 预算自动调整");
+    if (adjustments.gap_before != null) {
+      lines.push(`- 缺口（调整期估算）：${adjustments.gap_before} 元 → ${adjustments.gap_after ?? 0} 元，共 ${adjustments.rounds_used || 0} 轮。`);
+    }
+    adjustments.applied.slice(0, 8).forEach((action) => {
+      lines.push(
+        `- ${BUDGET_LEVER_LABELS[action.lever] || action.lever || "调整"}${action.day ? `（第 ${action.day} 天）` : ""}：${action.before?.title || ""}${action.before?.cost != null ? `（${action.before.cost} 元）` : ""} → ${action.after?.title || "移除"}${action.after?.cost != null ? `（${action.after.cost} 元）` : ""}，节省 ${action.saved || 0} 元。${action.reason || ""}`,
+      );
+    });
+    if (adjustments.note) lines.push(`- 说明：${adjustments.note}`);
+  }
   lines.push("", "### 天气与出行建议");
   Object.entries(data.weather || {}).forEach(([city, text]) => lines.push(`- ${city}：${text}`));
   ["sun_protection", "clothing", "umbrella", "schedule_note"].forEach((key) => {

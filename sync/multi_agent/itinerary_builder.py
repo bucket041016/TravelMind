@@ -209,6 +209,19 @@ def _timeline_item(
         "validation_note": validation_note,
     }
 
+def _retime_day_items(day: dict[str, Any]) -> None:
+    """删减后按 TIME_SLOTS 顺序重排当天剩余项的时间槽（说明项保持原槽位）。"""
+    slots = list(TIME_SLOTS)
+    day_number = day.get("day") or 1
+    movable = [item for item in day.get("items", []) if item.get("category") != "note"]
+    slot_index = 0
+    for item in movable:
+        slot = slots[min(slot_index, len(slots) - 1)]
+        slot_index += 1
+        item["time"] = slot
+        item["id"] = _make_item_id(f"day{day_number}-{slot}", 1, str(item.get("title") or ""))
+
+
 def _note_item(day_number: int, slot: str, title: str, detail: str) -> dict[str, Any]:
     item_id = _make_item_id(f"day{day_number}-{slot}", 1, title)
     return {
