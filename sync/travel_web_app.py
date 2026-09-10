@@ -451,6 +451,23 @@ def multi_agent_chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def _persist_plan_snapshot(plan: dict, *, changed_only: bool = False) -> None:
+    """持久化计划快照与偏好（观测失败不影响响应；Phase 5）。"""
+    if not isinstance(plan, dict) or not plan.get("plan_id"):
+        return
+    try:
+        from sync import persistence
+
+        persistence.save_plan_snapshot(
+            str(plan["plan_id"]), int(plan.get("version") or 0), plan
+        )
+        hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
+        if hints:
+            persistence.save_learned_hints([str(item) for item in hints])
+    except Exception:  # noqa: BLE001 - 持久化是旁路
+        return
+
+
 @app.post("/api/plan")
 def plan_trip(request: PlanRequest):
     try:
@@ -459,7 +476,9 @@ def plan_trip(request: PlanRequest):
             payload = request.model_dump()
         else:
             payload = request.dict()
-        return planner.run(payload)
+        plan = planner.run(payload)
+        _persist_plan_snapshot(plan)
+        return plan
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -478,7 +497,10 @@ def refine_plan(request: RefinePlanRequest):
 
     try:
         planner = get_structured_planner()
-        return planner.refine_plan(request.plan, request.message.strip())
+        result = planner.refine_plan(request.plan, request.message.strip())
+        if isinstance(result, dict) and result.get("status") == "ok" and result.get("changed"):
+            _persist_plan_snapshot(result.get("plan") or {})
+        return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

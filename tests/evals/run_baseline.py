@@ -146,6 +146,13 @@ def main() -> int:
     args.markdown_path.parent.mkdir(parents=True, exist_ok=True)
     args.json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     args.markdown_path.write_text(render_markdown(report), encoding="utf-8")
+    try:
+        # 仅 CLI 入口写摘要（run_all 被测试直接调用，绝不触库——139/4 隔离边界）。
+        from sync import persistence
+
+        persistence.save_eval_summary(args.suite, report.get("aggregate") or {})
+    except Exception:  # noqa: BLE001 - 持久化是旁路
+        pass
     print(render_markdown(report))
     return 0
 
