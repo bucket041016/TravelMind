@@ -564,6 +564,12 @@ svg {
   background: rgba(22, 119, 200, 0.12);
 }
 
+.progress-step.running {
+  color: var(--blue);
+  background: rgba(22, 119, 200, 0.12);
+  font-weight: 600;
+}
+
 .progress-step.done {
   color: var(--leaf);
 }

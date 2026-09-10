@@ -2426,6 +2426,173 @@ async function sendMessage(message, options = {}) {
   }
 }
 
+// 后端 _record 步骤名 → 前端 8 阶段进度（Phase 5：真实事件驱动进度）。
+const BACKEND_STEP_TO_STAGE = {
+  WeatherAgent: 2,
+  WeatherAdviceAgent: 2,
+  IntercityTransportAgent: 1,
+  POIAgent: 3,
+  HotelAgent: 4,
+  LocalMobilityAgent: 5,
+  DeepSeekPlanningBrainAgent: 5,
+  DayPlannerAgent: 5,
+  ItineraryReviewAgent: 6,
+  BudgetOptimizerAgent: 6,
+  MapAgent: 6,
+  BudgetAgent: 7,
+  QualityGateAgent: 7,
+  WriterAgent: 7,
+};
+
+function stageForStep(stepName) {
+  const text = String(stepName || "");
+  if (text.indexOf("LocalMobilityAgent 目的地内路线") === 0) return 6;
+  return BACKEND_STEP_TO_STAGE[text.split(" ")[0]] ?? 5;
+}
+
+const activeTaskStorageKey = "travelmind:activeTask:v1";
+let activeEventSource = null;
+
+function saveActiveTask(value) {
+  try {
+    sessionStorage.setItem(activeTaskStorageKey, JSON.stringify(value));
+  } catch (storageError) {
+    /* sessionStorage 不可用时跳过（刷新恢复降级为无） */
+  }
+}
+
+function readActiveTask() {
+  try {
+    const raw = sessionStorage.getItem(activeTaskStorageKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch (storageError) {
+    return null;
+  }
+}
+
+function clearActiveTask() {
+  try {
+    sessionStorage.removeItem(activeTaskStorageKey);
+  } catch (storageError) {
+    /* ignore */
+  }
+}
+
+function consumePlanEvents(taskId) {
+  // SSE 消费真实进度；断线由浏览器自动重连（服务端按 Last-Event-ID 重放），
+  // done/error 后显式 close 防止重连风暴。120s 无事件触发看门狗报错。
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/plan-events/${encodeURIComponent(taskId)}`);
+    activeEventSource = es;
+    let watchdog = null;
+    const armWatchdog = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        es.close();
+        activeEventSource = null;
+        reject(new Error("事件流 120 秒无响应，请稍后重试或刷新页面恢复"));
+      }, 120000);
+    };
+    armWatchdog();
+    const finish = (settle, value) => {
+      clearTimeout(watchdog);
+      es.close();
+      activeEventSource = null;
+      settle(value);
+    };
+    ["step_start", "step_end"].forEach((type) => {
+      es.addEventListener(type, (evt) => {
+        armWatchdog();
+        try {
+          const data = JSON.parse(evt.data || "{}");
+          if (type === "step_start") {
+            const stage = stageForStep(data.step);
+            progressIndex = stage;
+            renderProgressSteps(stage);
+            setProgress(Math.min(92, 8 + stage * 12), planningStages[stage]);
+          }
+        } catch (parseError) {
+          /* 忽略坏事件，等待下一个 */
+        }
+      });
+    });
+    es.addEventListener("done", () => {
+      armWatchdog();
+      finish(resolve, true);
+    });
+    es.addEventListener("error", (evt) => {
+      if (evt && evt.data) {
+        let data = {};
+        try {
+          data = JSON.parse(evt.data);
+        } catch (parseError) {
+          data = {};
+        }
+        finish(reject, new Error(data.message || "任务失败"));
+        return;
+      }
+      if (es.readyState === EventSource.CLOSED) {
+        clearTimeout(watchdog);
+        activeEventSource = null;
+        reject(new Error("事件流已断开"));
+      }
+      // readyState=CONNECTING：浏览器自动重连，继续等待。
+    });
+  });
+}
+
+async function sendPlanAsync(payload) {
+  // 返回 "fallback" 表示任务未启动、可安全回退同步端点；否则返回计划 JSON。
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  let submit;
+  try {
+    submit = await fetch("/api/plan-async", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, clientRequestId: requestId }),
+    });
+  } catch (networkError) {
+    return "fallback";
+  }
+  if (!submit.ok) {
+    if ([404, 405, 501, 503].includes(submit.status)) return "fallback";
+    throw new Error(await submit.text());
+  }
+  const submitData = await submit.json();
+  saveActiveTask({ taskId: submitData.task_id, requestId });
+  progressIndex = 0;
+  renderProgressSteps(0);
+  setProgress(8, planningStages[0]);
+  await consumePlanEvents(submitData.task_id);
+  const statusResponse = await fetch(`/api/task/${encodeURIComponent(submitData.task_id)}`);
+  if (!statusResponse.ok) throw new Error("任务状态查询失败");
+  const statusData = await statusResponse.json();
+  clearActiveTask();
+  if (!statusData.plan) throw new Error("任务已完成但计划快照不可用");
+  return statusData.plan;
+}
+
+async function sendPlanSync(payload) {
+  // 同步回退路径（Phase 4 之前的唯一路径）：AbortController 120s 超时（D7 最小修复）。
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const response = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function sendPlan(payload) {
   const message = buildTripPrompt();
   appendMessage("user", message);
@@ -2440,18 +2607,13 @@ async function sendPlan(payload) {
   startPlanningProgress();
 
   try {
-    const response = await fetch("/api/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text);
+    let data;
+    if (window.EventSource) {
+      const outcome = await sendPlanAsync(payload);
+      data = outcome === "fallback" ? await sendPlanSync(payload) : outcome;
+    } else {
+      data = await sendPlanSync(payload);
     }
-
-    const data = await response.json();
     currentPlanData = normalizePlanData(clonePlan(data));
     currentMarkdown = data.markdown || buildMarkdownFromPlan(currentPlanData);
     budgetAdjusted = false;
@@ -2478,6 +2640,48 @@ async function sendPlan(payload) {
     setTrace([], { skipSave: true });
     failPlanningProgress();
     saveSessionSnapshot();
+  } finally {
+    followupSendButton.disabled = false;
+    if (planButton) {
+      planButton.disabled = false;
+      planButton.textContent = "开始规划";
+    }
+  }
+}
+
+async function restoreActiveTask() {
+  // 刷新恢复：页面加载时若存在未完成的任务，重连 SSE 续传真实进度。
+  const active = readActiveTask();
+  if (!active || !active.taskId || !window.EventSource) return;
+  planningProgress.hidden = false;
+  followupSendButton.disabled = true;
+  if (planButton) {
+    planButton.disabled = true;
+    planButton.textContent = "规划中...";
+  }
+  startPlanningProgress();
+  try {
+    await consumePlanEvents(active.taskId);
+    const statusResponse = await fetch(`/api/task/${encodeURIComponent(active.taskId)}`);
+    if (!statusResponse.ok) throw new Error("任务状态查询失败");
+    const statusData = await statusResponse.json();
+    clearActiveTask();
+    if (!statusData.plan) throw new Error("任务已完成但计划快照不可用");
+    currentPlanData = normalizePlanData(clonePlan(statusData.plan));
+    currentMarkdown = statusData.plan.markdown || buildMarkdownFromPlan(currentPlanData);
+    budgetAdjusted = false;
+    editMode = false;
+    renderPlanResult(currentPlanData);
+    renderMarkdownResult(currentMarkdown);
+    setActiveTab("result", { skipSave: true });
+    setTrace(statusData.plan.trace || [], { skipSave: true });
+    completePlanningProgress();
+    planningProgress.hidden = true;
+    saveSessionSnapshot();
+  } catch (error) {
+    clearActiveTask();
+    failPlanningProgress();
+    appendMessage("assistant", `恢复进行中的规划失败：${error.message}`, { skipSave: true });
   } finally {
     followupSendButton.disabled = false;
     if (planButton) {
@@ -2521,6 +2725,11 @@ tripForm.addEventListener("change", updateSelectionSummary);
 resetButton.addEventListener("click", async () => {
   await fetch("/api/reset", { method: "POST" });
   clearInterval(progressTimer);
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
+  }
+  clearActiveTask();
   planningProgress.hidden = true;
   currentPlanData = null;
   currentMarkdown = "";
@@ -2623,3 +2832,4 @@ if (!restoreSessionSnapshot()) {
   renderEmptyResult();
 }
 if (toolList && !toolList.closest("[hidden]")) loadTools();
+restoreActiveTask();

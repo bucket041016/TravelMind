@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
+import itertools
+import json
 import operator
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Sequence, TypedDict
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 from langchain.tools.render import render_text_description
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -197,6 +203,10 @@ class PlanRequest(BaseModel):
 class RefinePlanRequest(BaseModel):
     plan: dict[str, object]
     message: str
+
+
+class PlanAsyncRequest(PlanRequest):
+    clientRequestId: str = ""
 
 
 app = FastAPI(title="TravelMind Agent Demo", version="0.1.0")
@@ -503,6 +513,119 @@ def refine_plan(request: RefinePlanRequest):
         return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/plan-async")
+def plan_trip_async(request: PlanAsyncRequest):
+    """异步规划入口（Phase 5）：立即返回 task_id，进度经 SSE 事件流消费。
+
+    幂等：同一 clientRequestId 在 running/done 状态下直接返回已有 task_id，
+    绝不重复启动真实外部调用。TRAVELMIND_PERSISTENCE=off 时 503（前端回退同步）。
+    """
+    from sync import persistence
+
+    if not persistence.persistence_enabled():
+        raise HTTPException(status_code=503, detail="异步任务已通过 TRAVELMIND_PERSISTENCE=off 关闭")
+
+    request_id = str(request.clientRequestId or "").strip()
+    if request_id:
+        existing = persistence.get_task_by_request(request_id)
+        if existing and existing["status"] in {"running", "done"}:
+            return {"task_id": existing["task_id"], "replayed": True}
+
+    payload = request.model_dump()
+    task_id = f"task-{uuid4().hex[:12]}"
+    if not persistence.create_task(task_id, request_id or task_id):
+        existing = persistence.get_task_by_request(request_id or task_id)
+        if existing:
+            return {"task_id": existing["task_id"], "replayed": True}
+        raise HTTPException(status_code=500, detail="任务登记失败")
+
+    planner = get_structured_planner()
+
+    def runner() -> None:
+        seq = itertools.count()
+
+        def on_progress(event: dict) -> None:
+            persistence.append_event(task_id, next(seq), str(event.get("type") or "progress"), event)
+
+        planner._progress.callback = on_progress
+        try:
+            plan = planner.run(payload)
+            persistence.append_event(task_id, next(seq), "done", {"plan_id": plan.get("plan_id")})
+            persistence.save_plan_snapshot(str(plan.get("plan_id") or ""), int(plan.get("version") or 0), plan)
+            hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
+            if hints:
+                persistence.save_learned_hints([str(item) for item in hints])
+            persistence.mark_task(task_id, "done", plan_id=str(plan.get("plan_id") or ""))
+        except Exception as exc:  # noqa: BLE001 - 任务级错误以 error 事件与任务状态呈现
+            message = str(exc)[:300]
+            persistence.append_event(task_id, next(seq), "error", {"message": message})
+            persistence.mark_task(task_id, "error", error=message)
+        finally:
+            planner._progress.callback = None
+
+    threading.Thread(target=runner, daemon=True, name=f"plan-{task_id}").start()
+    return {"task_id": task_id, "replayed": False}
+
+
+@app.get("/api/plan-events/{task_id}")
+async def plan_events(task_id: str, request: Request):
+    """SSE 事件流：step_start/step_end/done/error；断线重连按 Last-Event-ID 续传。"""
+    from sync import persistence
+
+    task = persistence.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+
+    async def event_stream():
+        last_seq = -1
+        try:
+            last_seq = int(request.headers.get("last-event-id") or -1)
+        except (TypeError, ValueError):
+            last_seq = -1
+        while True:
+            for seq, event, data in persistence.load_events(task_id, after_seq=last_seq):
+                last_seq = seq
+                yield {"id": str(seq), "event": event, "data": json.dumps(data, ensure_ascii=False)}
+                if event in {"done", "error"}:
+                    return
+            current = persistence.get_task(task_id)
+            if current is None:
+                yield {"event": "error", "data": json.dumps({"message": "任务不存在或已过期"}, ensure_ascii=False)}
+                return
+            if current["status"] == "done":
+                # 终态但 done 事件缺失（进程中断后重启等）：补发终态事件保证前端收敛。
+                yield {"event": "done", "data": json.dumps({"plan_id": current.get("plan_id")}, ensure_ascii=False)}
+                return
+            if current["status"] in {"error", "interrupted"}:
+                message = current.get("error") or "任务已中断"
+                yield {"event": "error", "data": json.dumps({"message": message}, ensure_ascii=False)}
+                return
+            await asyncio.sleep(0.25)
+
+    return EventSourceResponse(event_stream())
+
+
+@app.get("/api/task/{task_id}")
+def task_status(task_id: str):
+    """任务状态查询（断线可查询当前状态；done 时带计划快照）。"""
+    from sync import persistence
+
+    task = persistence.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    result: dict[str, object] = {
+        "task_id": task.get("task_id"),
+        "status": task.get("status"),
+        "plan_id": task.get("plan_id"),
+        "error": task.get("error"),
+    }
+    if task.get("status") == "done" and task.get("plan_id"):
+        plan = persistence.load_plan_snapshot(str(task["plan_id"]))
+        if plan:
+            result["plan"] = plan
+    return result
 
 
 @app.post("/api/reset")

@@ -9,5 +9,6 @@ langgraph==0.5.3
 pydantic==2.11.7
 python-dotenv==1.1.1
 Requests==2.32.4
+sse-starlette==3.0.3
 uvicorn==0.35.0
 fastmcp==3.4.0

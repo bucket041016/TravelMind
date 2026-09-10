@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import threading
 from datetime import date, datetime, timedelta
 from time import perf_counter
 from typing import Any, Callable
@@ -194,6 +195,11 @@ class StructuredTravelPlanner:
         self.flight_provider = FlightProvider()
         self.hotel_provider = HotelProvider()
         self.deepseek_brain = DeepSeekPlanningBrainAgent()
+        # 真实进度事件回调（Phase 5）：threading.local 隔离——planner 是单例，
+        # 线程池与后台任务线程并发时实例属性会串台。runner 线程在 run() 前
+        # 设置 callback/seq，_record 首尾各发一个事件；回调异常一律吞掉，
+        # 且事件绝不写回 trace 数组（评测 139/4 调用计数不受影响）。
+        self._progress = threading.local()
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         trace: list[dict[str, str]] = []
@@ -451,6 +457,12 @@ class StructuredTravelPlanner:
         *,
         status_hint: str | None = None,
     ) -> Any:
+        progress = getattr(self._progress, "callback", None)
+        if progress:
+            try:
+                progress({"type": "step_start", "step": name})
+            except Exception:  # noqa: BLE001 - 进度事件失败不影响规划
+                progress = None
         start = perf_counter()
         status = status_hint or "success"
         try:
@@ -462,15 +474,21 @@ class StructuredTravelPlanner:
         if status == "success" and isinstance(result, dict):
             status = self._llm_trace_status(result) or status
 
+        duration_ms = str(round((perf_counter() - start) * 1000))
         trace.append(
             {
                 "name": name,
                 "status": status,
                 "args": f"{prefs['originCity']}->{prefs['destinationCity']}, days={prefs['days']}",
                 "output": self._compact(result),
-                "duration_ms": str(round((perf_counter() - start) * 1000)),
+                "duration_ms": duration_ms,
             }
         )
+        if progress:
+            try:
+                progress({"type": "step_end", "step": name, "status": status, "duration_ms": duration_ms})
+            except Exception:  # noqa: BLE001
+                pass
         return result
 
     @staticmethod

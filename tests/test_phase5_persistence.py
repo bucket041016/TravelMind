@@ -13,7 +13,9 @@ from sync import persistence
 
 class _TmpDb:
     def __init__(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # Windows 下 SQLite WAL 伴生文件可能在连接关闭后短暂占用，
+        # ignore_cleanup_errors 防止偶发 PermissionError 干扰测试结果。
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self.tmp.name) / "test.db"
         self.env = patch.dict(
             os.environ,
