@@ -7,14 +7,14 @@
 
 TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web 服务和 DeepSeek 的结构化旅行规划工作台。产品把用户的出行条件转换为天气、跨城交通、目的地内交通、POI、酒店、预算、每日行程、地图和 Markdown 结果，并在页面中支持追问与行程编辑。
 
-当前用户端主链路是结构化表单 + `/api/plan`；追问优先走 `/api/refine-plan`（结构化增量修改，2026-09-05 起），失败或无计划时回退 `/api/multi-agent-chat` 文本链路。
+当前用户端主链路是结构化表单 + `/api/plan-async`（SSE 真实进度，2026-09-05 起；无 EventSource 或任务未启动时回退同步 `/api/plan`）；追问优先走 `/api/refine-plan`（结构化增量修改），失败或无计划时回退 `/api/multi-agent-chat` 文本链路。
 
-当前阶段：Phase 0-1 已完成；Phase 2 已完成并于 2026-09-05 通过真实验收关闭；Phase 3（预算反馈循环与全局质量门）与 Phase 4（结构化追问、计划版本与 Diff）均已于 2026-09-05 完成；Phase 2.5 保持可选实验支线。产品主线下一步为 Phase 5（持久化、真实进度与产品化质量门）。
+当前阶段：Phase 0-4 已完成（Phase 2 于 2026-09-05 通过真实验收关闭）；Phase 5 进行中——5.1 SQLite 持久化、5.2 幂等/超时/脱敏、5.3 SSE 真实进度已落地（`67aa8c9`/`f464e7c`），5.5 Playwright E2E 与 5.6 发布质量门进行中；Phase 2.5 保持可选实验支线。
 
 ## 2. 当前仓库状态
 
 - 分支：`main`（本地 feat/docs 提交成对推进；远端同步状态以 `git status` 为准，2026-09-05 已推送至 `64c33f9`）
-- 近期关键提交：`05def10`（D11 降级观测）、`029ef20`（D2 契约接线）、`dfb5a5b`（D12 稳定封装），均为 2026-09-05；其后叠加验收记录文档提交
+- 近期关键提交（均 2026-09-05）：`f464e7c`（SSE 真实进度）、`67aa8c9`（SQLite 持久化）、`360c611`（Phase 4 结构化追问）、`1414e06`（Phase 3 预算循环）、`05def10`（D11）、`029ef20`（D2）、`dfb5a5b`（D12）
 - 认知与执行文档现位于 `docs/`（2026-08-04 整理后），根目录同名文件为历史留档。
 - 工作区仅剩 `.dsh/` 本地技能资产未跟踪（保持在产品提交之外）。V3 已于 2026-08-24 按废案删除；结构化 MCP 原型已按 D12 完成并提交（2026-09-05）。
 
@@ -127,6 +127,10 @@ flowchart LR
 
 - `GET /api/tools`：读取当前单 Agent 的工具清单，依赖 DeepSeek 和 MCP 初始化。
 - `GET /api/map-static`：用高德静态地图生成 PNG；Key 缺失、请求失败或限流时返回 SVG 示意图。
+- `POST /api/plan-async`：异步规划入口（Phase 5），立即返回 `task_id`；`clientRequestId` 幂等（running/done 重放已有任务，不重复外部调用）；`TRAVELMIND_PERSISTENCE=off` 时 503。
+- `GET /api/plan-events/{task_id}`：SSE 事件流（step_start/step_end/done/error），以 `task_events` 表为唯一事实源，断线按 Last-Event-ID 重放续传。
+- `GET /api/task/{task_id}`：任务状态查询（断线可查）；done 时携带计划快照。
+- `POST /api/refine-plan`：结构化追问（Phase 4），携带完整计划 + 追问文本；失败原样返回不覆盖计划；`TRAVELMIND_REFINE=off` 时 503。
 - `POST /api/reset`：清空旧单 Agent 的会话历史。
 
 ## 6. MCP 工具与事实来源
@@ -192,15 +196,17 @@ D2/D11 规划器契约与 trace 测试（tests/test_phase2_contracts.py）：13/
 D11 DeepSeek 契约测试（tests/test_deepseek_contracts.py）：16/16 通过
 Phase 3 预算循环与质量门测试（tests/test_phase3_budget_loop.py）：20/20 通过
 Phase 4 结构化追问测试（tests/test_phase4_refine.py）：44/44 通过
+Phase 5 持久化测试（tests/test_phase5_persistence.py）：10/10 通过
+Phase 5 任务事件/SSE 测试（tests/test_phase5_task_events.py）：10/10 通过
 Phase 0 评测：5/5 通过（含 Phase 3 low_budget on/off 对照）；评测均为 10 个场景
 评测确定性断言：139 次调用/4 次 fixture 失败（Phase 3 重定基线，原 141）
-python -m unittest discover -s tests -q：189 个通过（当前工作树）
-合计测试：189/189 通过
+python -m unittest discover -s tests -q：209 个通过（当前工作树）
+合计测试：209/209 通过
 pip check：通过
 git diff --check：通过
 ```
 
-本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `189/189` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `209/209` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
 
 2026-09-05 真实验收补充（详见 findings.md 验收记录）：真实高德成功场景 24 个真实 POI + 契约输出正确（quality 72）；Key 缺失降级场景真实地点护栏守住、`candidate_contracts` 不放行不可定位项（quality 65）；DeepSeek 五态真实基线 used=2/其余 0（3 次真实规划）；桌面浏览器主流程完整渲染且控制台 0 错误。移动端视口遗留 Phase 5。
 
@@ -208,11 +214,13 @@ git diff --check：通过
 
 2026-09-05 Phase 4 补充：新增 `POST /api/refine-plan`（携带完整计划 + 追问，无状态）；追问解析为 7 类增量操作（铁律：模型只引用 item_id/候选 candidate_id，后端逐条校验）；计划新增 `version/parent_version/refine_history/constraint_snapshot` 字段，响应含结构化 diff 与 explanation；失败追问原样返回不覆盖计划；旧 `/api/multi-agent-chat` 保留为回退链路（前端自动回退并标注）；`TRAVELMIND_REFINE=off` 为服务端回滚开关。详见 findings.md Phase 4 小节。
 
+2026-09-05 Phase 5 补充（部分）：SQLite 持久化（计划快照/偏好/任务事件/评测摘要，入库脱敏，`TRAVELMIND_PERSISTENCE=off` 回滚）；SSE 真实进度（`/api/plan-async` + `/api/plan-events/{task_id}` + `/api/task/{task_id}`，DB 单一事实源，Last-Event-ID 续传，刷新可恢复，clientRequestId 幂等）；前端进度条由真实 step_start/step_end 事件驱动（15 后端步骤映射 8 阶段），回退矩阵保证任务启动后绝不重复外部调用。详见 findings.md Phase 5 小节。5.5 Playwright E2E 与 5.6 发布质量门进行中。
+
 ## 10. 后续开发的优先关注点
 
 1. [已完成 2026-09-05] Phase 2 收尾：D12（`dfb5a5b`）、D2（`029ef20`）、D11（`05def10`）+ 真实验收（高德成功/降级、DeepSeek 五态基线、桌面浏览器主流程 0 控制台错误）；移动端视口遗留 Phase 5。
 2. [已完成 2026-09-05] Phase 3：确定性预算反馈循环（三杠杆、轮上限 2、可解释调整记录）+ 硬质量门（独立 gate_violations 字段）；预算偏差 0.6230 → 0.4897；评测基线重定为 139 次调用。
-3. 产品主线下一步为 Phase 5（持久化、真实进度与产品化质量门：SQLite 偏好/版本持久化、真实任务事件 SSE、Playwright E2E）；Phase 2.5 保持可选实验（前置 D1 连接复用）。长期维护项包括移动端视口验收、前端请求超时、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；观察项见 findings.md（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约、low_budget/family_budget 需供应商接入才能完全达标）。
+3. [进行中 2026-09-05] Phase 5：5.1 持久化（`67aa8c9`）、5.2 幂等/超时/脱敏、5.3 SSE 真实进度（`f464e7c`）已落地；剩余 5.5 Playwright E2E（桌面+移动视口，覆盖 Phase 2 验收遗留的移动端缺口）与 5.6 发布质量门（评测版本对照+阈值阻止发布）。Phase 2.5 保持可选实验（前置 D1 连接复用）。长期维护项包括前端请求超时（同步路径已修，其余 fetch 待补）、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；观察项见 findings.md（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约、low_budget/family_budget 需供应商接入才能完全达标）。
 
 ## 11. 维护入口速查
 

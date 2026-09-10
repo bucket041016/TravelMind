@@ -446,12 +446,19 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 
 ### 具体步骤
 
-- [ ] 5.1 用 SQLite 保存明确偏好、计划版本、评测摘要和任务状态。
-- [ ] 5.2 增加缓存、幂等键、超时、重试预算和敏感信息脱敏日志。
-- [ ] 5.3 产生真实阶段事件，前端用 SSE 或 WebSocket 消费；断线可查询当前状态。
-- [ ] 5.4 接入结构化 trace 和可选 Langfuse/OpenTelemetry，不让观测依赖主流程成功。
+- [x] 5.1 用 SQLite 保存明确偏好、计划版本、评测摘要和任务状态。（2026-09-05，`67aa8c9`）
+- [x] 5.2 增加缓存、幂等键、超时、重试预算和敏感信息脱敏日志。（2026-09-05：幂等键 clientRequestId + 入库脱敏 redact_secrets + 同步回退 AbortController 120s 超时（D7 最小修复）；缓存/重试预算归 D1 与 Phase 2.5 前置，不在本轮）
+- [x] 5.3 产生真实阶段事件，前端用 SSE 或 WebSocket 消费；断线可查询当前状态。（2026-09-05，`f464e7c`：SSE + DB 单一事实源，Last-Event-ID 重放，GET /api/task/{id} 查询）
+- [~] 5.4 接入结构化 trace 和可选 Langfuse/OpenTelemetry，不让观测依赖主流程成功。（部分完成：trace/事件/快照全部落 SQLite 即本轮结构化观测，持久化失败吞错不影响主流程；Langfuse/OTel 按计划保持可选未接）
 - [ ] 5.5 使用 Playwright 覆盖桌面、移动端、规划、追问、编辑、导出和错误状态。
 - [ ] 5.6 建立质量阈值、回归报告和发布前检查清单。
+
+### Phase 5 已落地部分（2026-09-05）
+
+- **持久化**（`67aa8c9`）：新增 `sync/persistence.py`（sqlite3 标准库，5 表：tasks/task_events/plan_snapshots/user_preferences/eval_summaries；WAL + busy_timeout；每方法吞异常返回安全默认；`TRAVELMIND_PERSISTENCE=off` 全 no-op 不建目录；14 天顺手清理；running 超 10 分钟判 interrupted）。`/api/plan`、`/api/refine-plan` 写计划快照与 learnedHints；`run_baseline.main()` 写评测摘要（`run_all()` 绝不触库——139/4 测试边界）。入库统一过 `redact_secrets`（敏感键名整体掩码 + sk-/key= 模式替换）。`.gitignore` 补 `/data/`（journal/wal/shm 伴生文件不被 `*.db` 覆盖）。
+- **真实进度**（`f464e7c`）：`StructuredTravelPlanner` 增加 `threading.local` 进度钩子——planner 是单例，实例属性在线程池与后台任务线程并发时会串台；`_record` 首尾发 step_start/step_end，回调异常吞掉，**事件绝不进 trace 数组**（139 断言保护，全量 209/209 与评测 139/4 均已验证）。`POST /api/plan-async`（daemon 线程 + clientRequestId 幂等 + off 时 503）；`GET /api/plan-events/{task_id}`（SSE 以 task_events 表为唯一事实源——无内存态、进程重启后可恢复、Last-Event-ID 续传、孤儿任务补发终态事件、done/error 后关流）；`GET /api/task/{task_id}`（断线可查询 + done 带快照）。
+- **前端**：`sendPlan` 双路径——EventSource 可用时走异步（`BACKEND_STEP_TO_STAGE` 把 15 个后端步骤映射到既有 8 阶段进度，step_start 实时点亮）；**回退矩阵禁止二次外部调用**：只有任务未启动（404/405/501/503 或提交网络失败）才回退同步 `/api/plan`，任务已启动后绝不重发；120s 看门狗；done 后 `es.close()` 防重连风暴；`travelmind:activeTask:v1`（sessionStorage）支持刷新恢复进行中任务；同步回退路径补 AbortController 超时（D7）；reset 关闭事件流。顺手修复 `.progress-step.running` 无样式（只有 `.active`）；静态资源 bump `phase51`；`requirements.txt` 显式声明 `sse-starlette==3.0.3`。
+- **测试**：`tests/test_phase5_persistence.py` 10 例（tmp DB 隔离、off 不建文件、脱敏、事件增量、幂等、stale、快照/偏好/摘要往返、坏路径吞错）+ `tests/test_phase5_task_events.py` 10 例（SSE 事件序列/seq 单调/成对断言、幂等重提交调用数不增长、任务状态查询、off 503、未知 404、回调异常不影响 run、trace 形状不变、前端契约 4 断言）。全量 209/209、评测 5/5、pip check 通过。
 
 ### 验收标准
 

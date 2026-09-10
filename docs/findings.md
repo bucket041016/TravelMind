@@ -268,6 +268,18 @@ MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时
 - 前端 `sendMessage` 三路径：有计划先走 refine（changed → 更新计划+重渲染+版本徽标；无变更 → 只回答），失败/不可用自动回退旧链路并标注「旧链路文本回答，未修改当前计划」；无计划直接走旧链路（现状）。`TRAVELMIND_REFINE=off` 服务端 503，为回滚开关。
 - 验证：新增 `tests/test_phase4_refine.py` 44 用例；全量回归 **189/189**、评测 5/5（139/4 不变——refine 不触碰 run_baseline）、py_compile/`node --check`/`git diff --check` 通过。
 
+## Phase 5 持久化与真实进度（2026-09-05，部分落地）
+
+- **SQLite 单一事实源**（`sync/persistence.py`）：tasks/task_events/plan_snapshots/user_preferences/eval_summaries 五表；WAL + busy_timeout=3000 消解后台写线程与 SSE 读协程并发；每个公开方法吞异常返回安全默认——持久化是旁路，绝不影响请求主流程；`TRAVELMIND_PERSISTENCE=off` 全 no-op 且不创建任何目录（回滚点）。放弃「内存 dict + DB 双写」方案：DB 单一事实源让进程重启后 SSE 重连可恢复、无需自管跨线程锁、`GET /api/task/{id}` 免费获得「断线可查询」。
+- **入库脱敏** `redact_secrets`：敏感键名（api_key/secret/token/password 等）整体掩码为 `***`，字符串再叠加 sk-/key= 模式替换。实现中修正：最初的 `"api_key": "..."` JSON 文本正则对 Python dict 值无效，改为键名命中直接掩码（更强且正确）。
+- **139/4 隔离边界**：eval_summaries 写库只在 `run_baseline.main()`（CLI），`run_all()`（测试直接调用）绝不触库；进度事件只写 task_events 表、绝不进 run() 的 trace 数组——两处边界均有针对性测试固化（trace 条目键集合断言）。
+- **threading.local 进度钩子**：planner 是进程级单例，实例属性回调在线程池（/api/plan）与后台任务线程（/api/plan-async）并发时会串台（A 任务事件发给 B）；thread-local 天然按线程隔离，runner 在 finally 清理。`_record` 首尾各发一个事件（单步最长 14.6s，只发 start 前端会长时间静止）。
+- **SSE 回退矩阵的红线**：plan-async 一旦返回 task_id，真实 DeepSeek/高德调用已在后台发出——前端**绝不**因事件流问题回退同步 /api/plan（会造成同一请求两套外部调用，违反幂等验收）。只有任务未启动的失败（404/405/501/503/提交网络错误/无 EventSource）才回退；流中断走浏览器自动重连（Last-Event-ID → 服务端 seq 过滤重放）+ 120s 看门狗 + done 后显式 close（防重连风暴，服务端同样在终态后关流双向兜底）。
+- **刷新恢复**：`travelmind:activeTask:v1`（sessionStorage）存 {taskId, requestId}；页面加载在 restoreSessionSnapshot 之后调 restoreActiveTask()——进行中任务重连 SSE 续传真实进度，已完成取快照渲染。孤儿任务（进程被杀）由服务端 stale 检测（running 且 updated_at>10min → interrupted）收敛为 error 事件。
+- **顺手修复**：`.progress-step.running` 无样式（styles.css 只有 `.active`，8 步静态走格子视觉正常所以未被发现——真实事件驱动后 running 态长时间可见，必须修）；同步回退路径补 AbortController 120s 超时（D7 最小修复）；requirements.txt 显式声明 sse-starlette==3.0.3（此前仅为 fastmcp 传递依赖）。
+- **Windows 测试细节**：SQLite WAL 伴生文件在连接关闭后短暂占用，tmp 目录清理需 `ignore_cleanup_errors=True`；SSE 流在 done 事件即结束，但 runner 线程还在写快照/mark_task——测试须等任务真正终态再 teardown。
+- 验证：持久化 10 例 + 任务事件 10 例全绿；全量回归 **209/209**、评测 5/5（139/4 不变）、pip check、py_compile、`node --check`、`git diff --check` 通过。5.5（Playwright E2E）与 5.6（发布质量门）在本阶段后续小步交付。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
