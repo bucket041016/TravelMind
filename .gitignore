@@ -63,3 +63,8 @@ Thumbs.db
 
 # Phase 5 SQLite 持久化本地数据（含 -journal/-wal/-shm 伴生文件）
 /data/
+
+# Playwright E2E
+node_modules/
+/test-results/
+/playwright-report/

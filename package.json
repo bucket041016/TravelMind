@@ -1,0 +1,14 @@
+{
+  "name": "travelmind-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TravelMind Playwright E2E suite (offline fixture server, no real API keys needed)",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

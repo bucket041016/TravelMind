@@ -428,6 +428,12 @@ svg {
   gap: 12px;
   margin-bottom: 12px;
   padding: 13px 14px;
+  /* .glass-panel 的 backdrop-filter 已使 topbar 成为层叠上下文；若不显式给出
+  z-index，它按 auto 参与绘制，DOM 更靠后的 .main-tabs（同为 backdrop-filter
+  层叠上下文）会盖住 topbar 内 position:absolute 的 .export-menu——菜单自身的
+  z-index:30 无法逃出祖先的层叠上下文。 */
+  position: relative;
+  z-index: 2;
 }
 
 .eyebrow {
