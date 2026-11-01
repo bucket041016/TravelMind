@@ -280,11 +280,23 @@ MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时
 - **Windows 测试细节**：SQLite WAL 伴生文件在连接关闭后短暂占用，tmp 目录清理需 `ignore_cleanup_errors=True`；SSE 流在 done 事件即结束，但 runner 线程还在写快照/mark_task——测试须等任务真正终态再 teardown。
 - 验证：持久化 10 例 + 任务事件 10 例全绿；全量回归 **209/209**、评测 5/5（139/4 不变）、pip check、py_compile、`node --check`、`git diff --check` 通过。5.5（Playwright E2E）与 5.6（发布质量门）在本阶段后续小步交付。
 
+## Phase 5 收尾：Playwright E2E 与发布质量门（2026-11-01）
+
+- **E2E 结构**：`tests/e2e/fixture_server.py` 挂载生产 FastAPI app，但把 `planner.toolbox` 换成评测 `FixtureToolbox`、`planner.deepseek_brain` 换成 `E2EBrain`，因此零 Key、零网络、零日期依赖，且毫秒级确定性。`E2EBrain` 必须补 `parse_refine_ops`——评测 `FixtureDeepSeekBrain` 没有该方法，缺失会让 `/api/refine-plan` 500 而追问 spec 假绿。`freeText == "__e2e_force_error__"` 让 `run()` 抛错，单服务器双场景（错误态 + 正常态）。`E2E_PERSISTENCE_OFF=1` 置 `TRAVELMIND_PERSISTENCE=off` 覆盖 503 回退。独立 `data/e2e.db` 每次启动清理，不污染开发数据。
+- **配置要点**：单 `webServer`。MCP Server 的 streamable-http 端点对普通 GET 返回 406，无法作为 Playwright 的就绪探测目标，因此不采用双 webServer 方案。移动 project 用 `devices["iPhone 14"]` 但必须显式 `defaultBrowserType: "chromium"`——该 device 默认 webkit，而本项目只装 chromium。`webServer.command` 必须用反斜杠（Windows cmd 会把 `/Scripts` 当开关解析）。`fullyParallel: false` + `workers: 1`：SSE 与共享 DB 不适合并行。
+- **E2E 抓到的真实产品缺陷（移动端导出菜单不可点）**：`.topbar` 因 `.glass-panel` 设了 `backdrop-filter` 而成为层叠上下文，却不带显式 `z-index`；于是 `.export-menu` 的 `z-index:30` 被困在 topbar 内部，而 DOM 更靠后的 `.main-tabs`（同为 backdrop-filter 层叠上下文、`z-index:auto`）在 390px 视口下盖住菜单并吞掉指针事件，"导出 Markdown" 与 "打印/保存 PDF" 在移动端完全不可用。修复是给 `.topbar` 显式 `position: relative; z-index: 2`。这是 Phase 2 真实验收遗留的移动端缺口第一次产出产品缺陷，而非仅是测试问题——说明移动视口覆盖值得保留。
+- **三个 spec 的写法缺陷**（都是测试代码问题，不是产品问题）：`mobile-viewport` 用文件级 `test.skip(({}, testInfo) => testInfo.project.name ...)`，而该形式的 callback 只收到 fixtures，`testInfo` 恒 undefined，两个 project 都必然 TypeError；正确写法是 test 体内 `test.skip(condition, description)`。`edit-export` 点 `#exportButton` 后直接等 download，但该按钮只切换 `#exportMenu` 的 hidden，触发下载的是菜单内 `[data-export="markdown"]`——导出菜单 UI 上线后 spec 未同步。`error-state` 断言 `.bubble` 可见，但失败气泡由 `sendPlan` 的 catch 写进默认折叠的 `<details class="followup-panel">`，需先展开（`refine-followup.spec.ts` 已有同样处理，可作范本）。
+- **诊断方法记录**：`page.goto` 间歇性 120s 超时最初被误判为基建抖动。用手动起的 fixture server（curl 3ms 返回）复跑失败 spec 立刻通过，证明服务端无辜；再用探针 spec 打印 `elementFromPoint` 与两端元素的层叠上下文链，才定位到 backdrop-filter 困住 z-index。教训：**Playwright 报 "waiting for event download" 时，真正的失败可能在更早的 click 被静默重试**——`locator.click` 的拦截重试会一直耗到测试超时，错误却归因到后一个等待上。
+- **发布质量门**：`release_gate.compare()` 是纯函数，默认参照 `phase3_report.json` 在仓库内，干净 clone 可复现；`total_calls` 排除（成本非质量）；缺失/None 指标跳过；退出码 0/1/2。四条指标阈值见 `METRIC_RULES`。
+- **验证**：E2E 11 通过 / 1 跳过（桌面跳过移动专属溢出断言），3.1m；全量单测 220/220；发布质量门通过；py_compile、`node --check`、`git diff --check`、pip check 通过。观察项：单用例耗时波动大（4.5s-49s），疑似 `.glass-panel` 的 `backdrop-filter: blur(18px)` 在无头软件渲染下的重绘成本，暂不影响通过但值得后续关注。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
 
-- 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞 Phase 3。
+- 2026-11-01：产品主线 Phase 0-5 全部完成，无未关闭阶段。最后两个小步 5.5（Playwright E2E，桌面+移动双 project、六个场景）与 5.6（发布质量门，对照仓库内 `phase3_report.json`）已提交 `9e5353c`；同批还有 SSE 终态顺序修复 `f78f9b9`（快照与 mark_task 先落库、done 事件最后写）和一批死代码清理 `dabc91c`。当前状态：E2E 11 通过/1 跳过、单测 220/220、发布质量门通过。`.dsh/` 仍保持未跟踪。
+- 遗留事项优先级：D1（MCPToolAdapter 连接复用，Phase 2.5 唯一硬前置）> D3（前端展示来源/落选理由）> D6（`app.js` 拆 ES modules，建议在下次大改前端前做）> D7 剩余 fetch 超时 > D4/D5/D8/D9/D10 低风险清理。
+- 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件 -> 端到端与发布质量门。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞任何主线阶段。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
 - Phase 2 已完成 Contract/归一化/排序基础并接入 DeepSeek 候选输入；已提交基线保持旧 POI/酒店和文本 MCP 协议。2026-09-05 D12 已完成并提交（`dfb5a5b`）：稳定结果封装、`call_text`/`call_structured` 双访问、Pydantic 坏元素过滤、内存协议级测试与三入口兼容；同日 D2 完成并提交（`029ef20`）：`run()` 接线可选版本化 `candidate_contracts`（落选原因延后至 D3）；同日 D11 代码完成并提交（`05def10`）：DeepSeek 错误分类、attempt_count、fallback_reason 与 trace 五态（真实固定场景基线随真实验收步执行）。Phase 2 剩余闸门：高德成功/限流/Key 缺失/混合来源测试与真实服务对照、浏览器主流程验收。

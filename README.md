@@ -271,6 +271,13 @@ node --check .\web\app.js
 # 离线评测
 .\.venv\Scripts\python.exe -m unittest discover -s tests\evals -v
 
+# 发布质量门（当前评测 vs 仓库内参照报告，关键指标回退即失败）
+.\.venv\Scripts\python.exe -m tests.evals.release_gate
+
+# 端到端（Playwright，桌面 + 移动视口；自动起离线 fixture 服务，无需 Key）
+npm install
+npx playwright test
+
 # 补丁空白检查
 git diff --check
 ```
@@ -285,6 +292,8 @@ Get-NetTCPConnection -LocalPort 8010,8098 -State Listen |
 ```
 
 离线评测使用固定场景和 fixture，不依赖网络、API Key 或当前日期。报告位于 `tests/evals/`。
+
+E2E 首次运行前需 `npm install` 安装 `@playwright/test`，并确保已安装 Chromium（`npx playwright install chromium`）。测试跑在 `tests/e2e/fixture_server.py` 上：它挂载生产 FastAPI app，但把工具箱和规划脑换成评测 fixture，因此同样不依赖网络、API Key 或当前日期。HTML 报告在 `playwright-report/`，失败现场在 `test-results/`，两者都已在 `.gitignore` 中。
 
 ## 故障排查
 

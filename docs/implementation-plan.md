@@ -450,8 +450,8 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [x] 5.2 增加缓存、幂等键、超时、重试预算和敏感信息脱敏日志。（2026-09-05：幂等键 clientRequestId + 入库脱敏 redact_secrets + 同步回退 AbortController 120s 超时（D7 最小修复）；缓存/重试预算归 D1 与 Phase 2.5 前置，不在本轮）
 - [x] 5.3 产生真实阶段事件，前端用 SSE 或 WebSocket 消费；断线可查询当前状态。（2026-09-05，`f464e7c`：SSE + DB 单一事实源，Last-Event-ID 重放，GET /api/task/{id} 查询）
 - [~] 5.4 接入结构化 trace 和可选 Langfuse/OpenTelemetry，不让观测依赖主流程成功。（部分完成：trace/事件/快照全部落 SQLite 即本轮结构化观测，持久化失败吞错不影响主流程；Langfuse/OTel 按计划保持可选未接）
-- [ ] 5.5 使用 Playwright 覆盖桌面、移动端、规划、追问、编辑、导出和错误状态。
-- [ ] 5.6 建立质量阈值、回归报告和发布前检查清单。
+- [x] 5.5 使用 Playwright 覆盖桌面、移动端、规划、追问、编辑、导出和错误状态。（2026-11-01）
+- [x] 5.6 建立质量阈值、回归报告和发布前检查清单。（2026-11-01）
 
 ### Phase 5 已落地部分（2026-09-05）
 
@@ -459,6 +459,14 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - **真实进度**（`f464e7c`）：`StructuredTravelPlanner` 增加 `threading.local` 进度钩子——planner 是单例，实例属性在线程池与后台任务线程并发时会串台；`_record` 首尾发 step_start/step_end，回调异常吞掉，**事件绝不进 trace 数组**（139 断言保护，全量 209/209 与评测 139/4 均已验证）。`POST /api/plan-async`（daemon 线程 + clientRequestId 幂等 + off 时 503）；`GET /api/plan-events/{task_id}`（SSE 以 task_events 表为唯一事实源——无内存态、进程重启后可恢复、Last-Event-ID 续传、孤儿任务补发终态事件、done/error 后关流）；`GET /api/task/{task_id}`（断线可查询 + done 带快照）。
 - **前端**：`sendPlan` 双路径——EventSource 可用时走异步（`BACKEND_STEP_TO_STAGE` 把 15 个后端步骤映射到既有 8 阶段进度，step_start 实时点亮）；**回退矩阵禁止二次外部调用**：只有任务未启动（404/405/501/503 或提交网络失败）才回退同步 `/api/plan`，任务已启动后绝不重发；120s 看门狗；done 后 `es.close()` 防重连风暴；`travelmind:activeTask:v1`（sessionStorage）支持刷新恢复进行中任务；同步回退路径补 AbortController 超时（D7）；reset 关闭事件流。顺手修复 `.progress-step.running` 无样式（只有 `.active`）；静态资源 bump `phase51`；`requirements.txt` 显式声明 `sse-starlette==3.0.3`。
 - **测试**：`tests/test_phase5_persistence.py` 10 例（tmp DB 隔离、off 不建文件、脱敏、事件增量、幂等、stale、快照/偏好/摘要往返、坏路径吞错）+ `tests/test_phase5_task_events.py` 10 例（SSE 事件序列/seq 单调/成对断言、幂等重提交调用数不增长、任务状态查询、off 503、未知 404、回调异常不影响 run、trace 形状不变、前端契约 4 断言）。全量 209/209、评测 5/5、pip check 通过。
+
+### Phase 5 收尾：E2E 与发布质量门（2026-11-01）
+
+- **5.5 Playwright E2E**（`tests/e2e/`）：`fixture_server.py` 用生产 FastAPI app + 评测 fixture toolbox/brain 起服务，零 Key、零网络、零日期依赖；`E2EBrain` 补 `parse_refine_ops`（评测 fixture 没有该方法，否则 `/api/refine-plan` 500 会让追问 spec 假绿）；`freeText == "__e2e_force_error__"` 时 `run()` 抛错，单服务器双场景；`E2E_PERSISTENCE_OFF=1` 覆盖 503 回退；独立 `data/e2e.db` 每次启动清理。五个 spec × 桌面/移动两个 project（iPhone 14 视口，显式覆盖 `defaultBrowserType` 为 chromium——`devices["iPhone 14"]` 默认 webkit 而本项目只装 chromium）。配置走单 `webServer`：MCP Server 的 streamable-http 端点对普通 GET 返回 406，不能作为就绪探测目标，因此不采用双 webServer。
+- **5.6 发布质量门**（`tests/evals/release_gate.py` + `tests/test_release_gate.py`）：`compare()` 是纯函数（不触 DB/网络/历史文件），默认参照物是仓库内已提交的 `phase3_report.json`（干净 clone 可复现）；`total_calls` 不进闸门（调用数是成本不是质量）；指标缺失或 None 跳过而非判回退；CLI 退出码 0 通过 / 1 回退 / 2 数据不可用。四条指标：`budget_deviation`（相对 10%）、`real_place_binding_rate`（绝对 0.05）、`hard_constraint_satisfaction`（绝对 0.05）、`fallback_rate`（绝对 0.10）。
+- **E2E 逼出的真实缺陷**：`.topbar` 因 `.glass-panel` 的 `backdrop-filter` 成为层叠上下文却不带显式 `z-index`，`.export-menu` 的 `z-index:30` 被困在其中；DOM 更靠后的 `.main-tabs`（同为 backdrop-filter 层叠上下文、`z-index:auto`）在 390px 下盖住导出菜单并吞掉点击，"导出 Markdown"/"打印/保存 PDF" 在移动端完全不可点。修复是给 `.topbar` 显式 `position: relative; z-index: 2`。这是移动端视口覆盖（Phase 2 真实验收遗留缺口）第一次抓到产品缺陷，而非仅仅是测试问题。
+- **三个 spec 的写法修正**：`mobile-viewport` 原先用文件级 `test.skip(({}, testInfo) => testInfo.project.name ...)` 做条件跳转，而该 callback 只收到 fixtures，`testInfo` 恒为 undefined，两个 project 都必然 TypeError——改为 test 体内 `test.skip(condition, description)`；`edit-export` 原先点 `#exportButton` 就等 download，而该按钮只切换 `#exportMenu` 的 hidden，真正触发下载的是菜单内 `[data-export="markdown"]`（导出菜单 UI 上线后 spec 未同步）；`error-state` 断言 `.bubble` 可见，但失败气泡由 `sendPlan` 的 catch 写进默认折叠的 `<details class="followup-panel">`，需先展开（与 `refine-followup.spec.ts` 同一处理）。
+- **验证**：E2E 11 通过 / 1 跳过（桌面正确跳过移动专属的横向溢出断言），3.1 分钟；全量单测 220/220；发布质量门对照 `phase3_report.json` 通过；`py_compile`、`node --check`、`git diff --check`、`pip check` 通过。8010/8098 未监听，以上仍只覆盖离线受控路径。
 
 ### 验收标准
 
@@ -490,7 +498,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 | D4 | 遗留链路退役 | `async/` 4 文件、`sync/agent_chatbot_*.py`、`sync/user_api.py`、legacy `*_agent.py`+`orchestrator.py`；旧 `/api/multi-agent-chat` 已补字符串 Fake 冒烟测试，但尚未覆盖结构化 dict/list | 先补结构化返回兼容测试，再决定保留 API、适配返回类型或明确下线 | 中 | D12 关联 | 冒烟测试已补，退役决策待定 |
 | D5 | 重复函数收敛 | haversine ×4（1 份无 clamp）、`_poi_key`×2、`_parse_price_range`×2（全角～处理不一致）、`_default_hotel_area`×3 | 收敛到 `contracts.py`/`text_parser.py` 单一实现 | 中 | — | 未开始 |
 | D6 | app.js 单文件约 2300 行 | 双页面历史遗留，维护困难 | 按渲染/请求/编辑/导出拆 ES modules | 中 | 建议 Phase 4 动前端前完成 | 未开始 |
-| D7 | 前端 fetch 无超时、错误透传 | 请求可能永久挂起；错误直接显示后端 detail | AbortController 超时 + 结构化错误提示 | 中 | — | 未开始 |
+| D7 | 前端 fetch 无超时、错误透传 | 请求可能永久挂起；错误直接显示后端 detail | AbortController 超时 + 结构化错误提示 | 中 | — | 部分完成：同步回退 `/api/plan` 已有 AbortController 120s；其余 fetch（追问、任务快照）仍无超时，待统一收敛 |
 | D8 | staticmethod 兼容层 | `structured_planner.py` 约 150 行桥接（Phase E 遗留） | 测试全部改纯函数调用后移除桥接 | 低 | — | 未开始 |
 | D9 | 仅测试使用的函数 | `normalize_route_fact`、`validate_place_candidate` 生产链路未使用 | 明确接入或移除，避免误导读者 | 低 | — | 未开始 |
 | D10 | 小项合集 | CORS `allow_origins=*`+`allow_credentials=True` 无效组合；`max_tokens=3500` 多日行程截断风险；`write_itinerary_file` 文件名边界；Windows 日志 GBK 编码 | 逐项顺手修 | 低 | — | 未开始 |
@@ -513,7 +521,7 @@ Phase 1 已完成验收，进入 Phase 2 前先确认候选 Contract 的字段�
 - [pending] Phase 2.5：可选工具增强规划脑（agentic 补查）
 - [completed] Phase 3：预算反馈循环与全局质量门（2026-09-05）
 - [completed] Phase 4：结构化追问、计划版本与 Diff（2026-09-05）
-- [pending] Phase 5：持久化、真实进度与产品化质量门
+- [completed] Phase 5：持久化、真实进度与产品化质量门（2026-11-01，5.5 E2E 与 5.6 发布质量门收尾）
 - [pending] 工程债务 D1/D3-D10（D2/D11/D12/D13 已关闭；D1 为 Phase 2.5 前置）
 
 ### Phase 2 当前步骤
@@ -640,6 +648,10 @@ git diff --check
 - 不使用破坏性 Git 命令覆盖用户未提交的工作。
 
 ## 当前暂停点与下一轮计划
+
+2026-11-01：Phase 5 五个小步全部落地，5.5 Playwright E2E 与 5.6 发布质量门收尾后产品主线（Phase 0-5）已无未关闭阶段。本轮工作区在 `main` 上，把遗留的 Phase 5.5/5.6 代码、SSE 终态顺序修复与一批死代码清理分别提交为 `dabc91c`（refactor）、`f78f9b9`（fix）、`9e5353c`（feat）。E2E 11 通过 / 1 跳过（3.1m）、全量单测 220/220、发布质量门对照 `phase3_report.json` 通过、`py_compile`/`node --check`/`git diff --check` 通过；8010/8098 未监听，因此仍只证明离线受控路径稳定，真实高德/DeepSeek 与浏览器端到端验收未做。
+
+遗留事项按优先级：D1（MCPToolAdapter 连接复用）是 Phase 2.5 唯一硬前置；D3（前端展示来源/落选理由）依赖 D2 已产出但页面未消费；D6（`app.js` 单文件约 2800 行拆 ES modules）建议在下次大改前端前做；D7 剩余 fetch 超时待统一；D4/D5/D8/D9/D10 为低风险清理。Phase 2.5 保持可选实验支线。
 
 已建立认知基线并完成朋友 `Ay` 分支的深度评估；相关 Phase A-E 代码已经进入当前代码历史。2026-08-24 当前工作区位于 `main`、HEAD `7a27c02`，相对 `origin/main` 领先 3 个本地提交，并混有结构化 MCP、`.dsh/` 和文档三类未提交范围；V3 废案已经删除。当前工作树全量回归 90/90、Node 语法、`pip check` 和 `git diff --check` 通过；8010/8098 均未监听，因此这些结果只证明离线路径稳定，不代表结构化 MCP、真实 DeepSeek/高德或浏览器端到端验收完成。
 

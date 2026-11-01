@@ -9,7 +9,7 @@ TravelMind 是一个基于 Python、FastAPI、LangGraph、FastMCP、高德 Web �
 
 当前用户端主链路是结构化表单 + `/api/plan-async`（SSE 真实进度，2026-09-05 起；无 EventSource 或任务未启动时回退同步 `/api/plan`）；追问优先走 `/api/refine-plan`（结构化增量修改），失败或无计划时回退 `/api/multi-agent-chat` 文本链路。
 
-当前阶段：Phase 0-4 已完成（Phase 2 于 2026-09-05 通过真实验收关闭）；Phase 5 进行中——5.1 SQLite 持久化、5.2 幂等/超时/脱敏、5.3 SSE 真实进度已落地（`67aa8c9`/`f464e7c`），5.5 Playwright E2E 与 5.6 发布质量门进行中；Phase 2.5 保持可选实验支线。
+当前阶段：Phase 0-5 已完成（Phase 2 于 2026-09-05 通过真实验收关闭；Phase 5 的 5.1 SQLite 持久化、5.2 幂等/超时/脱敏、5.3 SSE 真实进度、5.4 结构化 trace 落库、5.5 Playwright E2E 与 5.6 发布质量门均已落地，5.5/5.6 于 2026-11-01 收尾，提交 `9e5353c`）。Phase 2.5 保持可选实验支线（唯一硬前置为 D1 连接复用）。
 
 ## 2. 当前仓库状态
 
@@ -71,7 +71,8 @@ flowchart LR
 | `web/app.js` | 请求、状态恢复、结果渲染、编辑、预算重算、导出 | 当前前端逻辑 |
 | `web/styles.css` | 页面布局、结果模块、响应式和打印样式 | 当前视觉样式 |
 | `tests/test_travelmind_regression.py` | 规划器和前端契约回归 | 当前测试入口 |
-| `tests/evals/` | 离线评测场景、fixture、指标和报告 | 效果护栏 |
+| `tests/evals/` | 离线评测场景、fixture、指标和报告；`release_gate.py` 发布质量门 | 效果护栏 |
+| `tests/e2e/` | Playwright 端到端：`fixture_server.py` 离线 fixture 服务 + 桌面/移动两个 project 的 spec | 用户流程护栏 |
 | `async/` | 独立异步 ReAct/MCP/用户 API 示例 | 遗留实验区 |
 | `docs/` | 合并后的文档体系与历史归档 | 认知入口 |
 
@@ -177,36 +178,29 @@ $env:MCP_SERVER_URL='http://127.0.0.1:8098/my-custom-path'
 - 表单包含"补充要求"输入；生成结果后质量体检区域显示逐条约束状态和证据。
 - `localStorage` 保存当前计划、追问、活动标签和轻量偏好；旧快照缺字段时进行归一化和提示。
 - 编辑模式支持每日活动上移、下移和删除，之后在浏览器端重建相邻地点路线、预算和 Markdown。
-- 导出支持 Markdown 下载和浏览器打印保存 PDF。
+- 导出是两级菜单：`#exportButton` 只切换 `#exportMenu` 的显隐，Markdown 下载与打印/保存 PDF 由菜单内按钮触发。
 - 追问可继续修改偏好，但其响应仍来自旧的 `/api/multi-agent-chat` 文本链路。
 - 760px 以下进入纵向布局；桌面结果生成后左侧输入区收缩为行程目录。
 
 ## 9. 已验证结果
 
-最近复核：2026-09-05
+最近复核：2026-11-01
 
 ```text
 Python 全量 py_compile（sync/async/tests）：通过
-node --check web/app.js：通过，Node v24.18.0
-Phase 1 专项测试：5/5 通过
-Phase 2 Contract/集成测试：7/7 通过
-Phase E 约束链路测试：22/22 通过
-D12 协议级测试（tests/test_mcp_protocol.py）：11/11 通过
-D2/D11 规划器契约与 trace 测试（tests/test_phase2_contracts.py）：13/13 通过
-D11 DeepSeek 契约测试（tests/test_deepseek_contracts.py）：16/16 通过
-Phase 3 预算循环与质量门测试（tests/test_phase3_budget_loop.py）：20/20 通过
-Phase 4 结构化追问测试（tests/test_phase4_refine.py）：44/44 通过
-Phase 5 持久化测试（tests/test_phase5_persistence.py）：10/10 通过
-Phase 5 任务事件/SSE 测试（tests/test_phase5_task_events.py）：10/10 通过
-Phase 0 评测：5/5 通过（含 Phase 3 low_budget on/off 对照）；评测均为 10 个场景
-评测确定性断言：139 次调用/4 次 fixture 失败（Phase 3 重定基线，原 141）
-python -m unittest discover -s tests -q：209 个通过（当前工作树）
-合计测试：209/209 通过
+node --check web/app.js：通过
+python -m unittest discover -s tests -q：220 个通过
+发布质量门（tests.evals.release_gate，参照 phase3_report.json）：通过，关键指标无回退
+Playwright E2E（npx playwright test）：11 通过 / 1 跳过，3.1 分钟
 pip check：通过
 git diff --check：通过
 ```
 
-本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `209/209` 证明离线受控路径与内存 FastMCP 协议级往返（含三入口兼容）稳定。
+E2E 覆盖桌面（1280x720）与移动（iPhone 14 视口）两个 project：规划主流程（真实 SSE 进度驱动 + 控制台 0 错误）、编辑行程删除条目并导出 Markdown、SSE error 事件错误态、无 EventSource 时回退同步端点、结构化追问与版本徽标、移动视口无横向溢出。桌面会跳过移动专属的溢出断言，因此 12 个运行中 1 个为 skipped。全部走 `tests/e2e/fixture_server.py`（生产 app + 离线 fixture planner），零 API Key、零网络、零日期依赖。
+
+2026-09-05 复核（历史记录）：离线受控路径 209/209、评测 5/5（139 次调用/4 次 fixture 失败）、真实验收见 findings.md（高德成功场景 24 个真实 POI + 契约输出正确 quality 72；Key 缺失降级场景真实地点护栏守住 quality 65；DeepSeek 五态真实基线 used=2/其余 0；桌面浏览器主流程完整渲染且控制台 0 错误）。
+
+本次探测到 8010 和 8098 均没有监听进程，未进行真实 MCP/高德/DeepSeek 请求或浏览器端到端截图验证。当前 `220/220` 与 E2E 全绿证明离线受控路径、内存 FastMCP 协议级往返与浏览器端到端（离线 fixture）稳定，不代表真实供应商调用已验证。
 
 2026-09-05 真实验收补充（详见 findings.md 验收记录）：真实高德成功场景 24 个真实 POI + 契约输出正确（quality 72）；Key 缺失降级场景真实地点护栏守住、`candidate_contracts` 不放行不可定位项（quality 65）；DeepSeek 五态真实基线 used=2/其余 0（3 次真实规划）；桌面浏览器主流程完整渲染且控制台 0 错误。移动端视口遗留 Phase 5。
 
@@ -220,7 +214,7 @@ git diff --check：通过
 
 1. [已完成 2026-09-05] Phase 2 收尾：D12（`dfb5a5b`）、D2（`029ef20`）、D11（`05def10`）+ 真实验收（高德成功/降级、DeepSeek 五态基线、桌面浏览器主流程 0 控制台错误）；移动端视口遗留 Phase 5。
 2. [已完成 2026-09-05] Phase 3：确定性预算反馈循环（三杠杆、轮上限 2、可解释调整记录）+ 硬质量门（独立 gate_violations 字段）；预算偏差 0.6230 → 0.4897；评测基线重定为 139 次调用。
-3. [进行中 2026-09-05] Phase 5：5.1 持久化（`67aa8c9`）、5.2 幂等/超时/脱敏、5.3 SSE 真实进度（`f464e7c`）已落地；剩余 5.5 Playwright E2E（桌面+移动视口，覆盖 Phase 2 验收遗留的移动端缺口）与 5.6 发布质量门（评测版本对照+阈值阻止发布）。Phase 2.5 保持可选实验（前置 D1 连接复用）。长期维护项包括前端请求超时（同步路径已修，其余 fetch 待补）、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；观察项见 findings.md（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约、low_budget/family_budget 需供应商接入才能完全达标）。
+3. [已完成 2026-11-01] Phase 5：5.1 持久化（`67aa8c9`）、5.2 幂等/超时/脱敏、5.3 SSE 真实进度（`f464e7c`）、5.4 结构化 trace 落库、5.5 Playwright E2E 与 5.6 发布质量门（`9e5353c`）全部落地，产品主线 Phase 0-5 无未关闭阶段。Phase 2.5 保持可选实验（前置 D1 连接复用）。长期维护项包括前端请求超时（同步路径已修，其余 fetch 待补）、遗留端口示例清理和 `structured_planner.py` 兼容桥接收敛；观察项见 findings.md（降级 POI source 标签、DeepSeek 路径约束评审、示例酒店进契约、low_budget/family_budget 需供应商接入才能完全达标）。
 
 ## 11. 维护入口速查
 
