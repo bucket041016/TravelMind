@@ -141,6 +141,27 @@ class TravelMindTaskEventsTests(unittest.TestCase):
         self.assertTrue(data["plan"]["itinerary_days"])
         self.assertEqual(data["plan"]["plan_id"], data["plan_id"])
 
+    def test_done_event_implies_terminal_state_and_snapshot(self):
+        """竞态回归：客户端收到 done 事件后立即查任务，必须已是终态且带快照。
+
+        runner 必须「快照+mark_task 先落库、done 事件最后写」；否则前端
+        done→GET /api/task 会拿到 running 状态与空 plan（E2E 曾复现）。
+        """
+        response = self.client.post("/api/plan-async", json={
+            "originCity": "广州", "destinationCity": "深圳", "days": 2, "clientRequestId": "req-race",
+        })
+        task_id = response.json()["task_id"]
+        with self.client.stream("GET", f"/api/plan-events/{task_id}") as stream:
+            for line in stream.iter_lines():
+                if line.strip().startswith("event:") and line.split(":", 1)[1].strip() == "done":
+                    break
+        # 不轮询、不等待——done 事件到达即查（顺序不变量的直接断言）。
+        status = self.client.get(f"/api/task/{task_id}").json()
+        self.assertEqual(status["status"], "done")
+        self.assertTrue(status["plan"])
+        self.assertTrue(status["plan"]["itinerary_days"])
+        _wait_task_done(task_id)
+
     def test_task_status_unknown_returns_404(self):
         self.assertEqual(self.client.get("/api/task/task-missing").status_code, 404)
 

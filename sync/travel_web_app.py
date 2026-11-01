@@ -552,16 +552,19 @@ def plan_trip_async(request: PlanAsyncRequest):
         planner._progress.callback = on_progress
         try:
             plan = planner.run(payload)
-            persistence.append_event(task_id, next(seq), "done", {"plan_id": plan.get("plan_id")})
-            persistence.save_plan_snapshot(str(plan.get("plan_id") or ""), int(plan.get("version") or 0), plan)
+            # 顺序不变量：快照与终态先落库，done 事件最后写——
+            # 客户端收到 done 后立刻查 /api/task 必须能拿到 plan（否则会误报快照不可用）。
+            plan_id = str(plan.get("plan_id") or "")
+            persistence.save_plan_snapshot(plan_id, int(plan.get("version") or 0), plan)
             hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
             if hints:
                 persistence.save_learned_hints([str(item) for item in hints])
-            persistence.mark_task(task_id, "done", plan_id=str(plan.get("plan_id") or ""))
+            persistence.mark_task(task_id, "done", plan_id=plan_id)
+            persistence.append_event(task_id, next(seq), "done", {"plan_id": plan.get("plan_id")})
         except Exception as exc:  # noqa: BLE001 - 任务级错误以 error 事件与任务状态呈现
             message = str(exc)[:300]
-            persistence.append_event(task_id, next(seq), "error", {"message": message})
             persistence.mark_task(task_id, "error", error=message)
+            persistence.append_event(task_id, next(seq), "error", {"message": message})
         finally:
             planner._progress.callback = None
 

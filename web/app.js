@@ -2541,6 +2541,20 @@ function consumePlanEvents(taskId) {
   });
 }
 
+async function fetchTaskPlan(taskId) {
+  // done 事件后取计划快照；服务端已保证「快照先落库、done 最后写」，
+  // 此处短重试仅为磁盘/调度抖动的纵深防御。
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await fetch(`/api/task/${encodeURIComponent(taskId)}`);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.plan) return data.plan;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  throw new Error("任务已完成但计划快照不可用");
+}
+
 async function sendPlanAsync(payload) {
   // 返回 "fallback" 表示任务未启动、可安全回退同步端点；否则返回计划 JSON。
   const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -2564,12 +2578,9 @@ async function sendPlanAsync(payload) {
   renderProgressSteps(0);
   setProgress(8, planningStages[0]);
   await consumePlanEvents(submitData.task_id);
-  const statusResponse = await fetch(`/api/task/${encodeURIComponent(submitData.task_id)}`);
-  if (!statusResponse.ok) throw new Error("任务状态查询失败");
-  const statusData = await statusResponse.json();
+  const plan = await fetchTaskPlan(submitData.task_id);
   clearActiveTask();
-  if (!statusData.plan) throw new Error("任务已完成但计划快照不可用");
-  return statusData.plan;
+  return plan;
 }
 
 async function sendPlanSync(payload) {
@@ -2662,19 +2673,16 @@ async function restoreActiveTask() {
   startPlanningProgress();
   try {
     await consumePlanEvents(active.taskId);
-    const statusResponse = await fetch(`/api/task/${encodeURIComponent(active.taskId)}`);
-    if (!statusResponse.ok) throw new Error("任务状态查询失败");
-    const statusData = await statusResponse.json();
+    const plan = await fetchTaskPlan(active.taskId);
     clearActiveTask();
-    if (!statusData.plan) throw new Error("任务已完成但计划快照不可用");
-    currentPlanData = normalizePlanData(clonePlan(statusData.plan));
-    currentMarkdown = statusData.plan.markdown || buildMarkdownFromPlan(currentPlanData);
+    currentPlanData = normalizePlanData(clonePlan(plan));
+    currentMarkdown = plan.markdown || buildMarkdownFromPlan(currentPlanData);
     budgetAdjusted = false;
     editMode = false;
     renderPlanResult(currentPlanData);
     renderMarkdownResult(currentMarkdown);
     setActiveTab("result", { skipSave: true });
-    setTrace(statusData.plan.trace || [], { skipSave: true });
+    setTrace(plan.trace || [], { skipSave: true });
     completePlanningProgress();
     planningProgress.hidden = true;
     saveSessionSnapshot();
