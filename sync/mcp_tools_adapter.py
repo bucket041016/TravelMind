@@ -5,11 +5,10 @@ MCP工具适配器 - 将MCP Server工具转换为LangChain工具
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Callable, Union, Type
+from typing import Dict, Any, List, Callable, Type
 from fastmcp import Client
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field, create_model
-from functools import wraps
 
 
 @dataclass

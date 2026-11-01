@@ -49,20 +49,6 @@ def budget_loop_enabled() -> bool:
     return _loop_enabled()
 
 
-def _disabled_result() -> dict[str, Any]:
-    return {
-        "enabled": False,
-        "rounds_used": 0,
-        "applied": [],
-        "skipped": [],
-        "total_saved": 0,
-        "gap_before": None,
-        "gap_after": None,
-        "final_verdict": None,
-        "note": "",
-    }
-
-
 def _provisional_budget(
     prefs: dict[str, Any],
     routes: dict[str, Any],

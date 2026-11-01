@@ -2,14 +2,12 @@
 #如果要使用fastapi server,先把prox关闭，user_api.py跑起来：python user_api.py
 #使用python client.py启动项目
 
-import os
 import json
 from typing import TypedDict, Annotated, Sequence
 import operator
 from datetime import datetime
 import requests
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_tavily import TavilySearch  # 暂时注释掉，避免模块导入问题

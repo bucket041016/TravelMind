@@ -5,14 +5,12 @@
 
 import os
 import json
-import asyncio
 from typing import TypedDict, Annotated, Sequence
 import operator
 from datetime import datetime
 import requests
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage, SystemMessage
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 # from langchain_tavily import TavilySearch  # 暂时注释掉，避免模块导入问题

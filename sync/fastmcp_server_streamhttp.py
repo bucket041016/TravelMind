@@ -563,15 +563,6 @@ def _get_weather_from_amap(city: str, date: str) -> str:
     )
 
 
-def _extract_step_text(steps: list, limit: int = 5) -> str:
-    instructions = []
-    for step in steps[:limit]:
-        instruction = step.get("instruction") or step.get("road") or step.get("action")
-        if instruction:
-            instructions.append(str(instruction).replace("<br/>", ""))
-    return "；".join(instructions) if instructions else "暂无详细分步"
-
-
 def _summarize_driving(data: dict, limit: int) -> list[str]:
     route = data.get("route", {})
     paths = route.get("paths") or []
