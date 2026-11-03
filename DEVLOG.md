@@ -6,6 +6,48 @@
 
 ---
 
+## [2026-11-01 15:30] 新增知识库检索工具 kb_retrieve
+
+### 意图
+- 行程里的景点详情、建议时长、预约规则等事实此前完全由 DeepSeek 自由生成，是幻觉的主要来源。落地 `docs/open-source-comparison.md` 中已列为 P1 的「目的地知识库」缺口：新增第 10 个 MCP 工具做检索，用检索结果替代模型对事实性文字的自由生成。
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `sync/knowledge/__init__.py` | 新增 | 知识库包入口与共享检索器实例 |
+| `sync/knowledge/retriever.py` | 新增 | `KnowledgeRetriever` 接口 + `KeywordRetriever` 纯 Python 关键词打分，零新依赖 |
+| `sync/knowledge/cities/*.json` | 新增 | 9 城人工策展语料（城市攻略、分区、景点详情、美食注记、季节贴士） |
+| `sync/fastmcp_server_streamhttp.py` | 修改 | 新增 `kb_retrieve` 工具，返回结构化 dict，异常不抛 |
+| `sync/multi_agent/knowledge_service.py` | 新增 | 规划侧消费者：`knowledge_enabled()` flag、候选匹配与富化 |
+| `sync/multi_agent/structured_planner.py` | 修改 | `run()` 插入 `KnowledgeAgent 知识库检索` 步骤，计划新增可选 `knowledge` 字段 |
+| `sync/multi_agent/itinerary_builder.py` | 修改 | 规划脑 payload 暴露 knowledge 字段；行程项新增 `knowledge_detail` 与 `detail_source` |
+| `sync/multi_agent/markdown_writer.py` | 修改 | Markdown 导出增加「知识库详情」行 |
+| `web/app.js` | 修改 | `KnowledgeAgent` 映射到进度第 3 阶段；优先渲染知识库详情并打标；导出同步 |
+| `web/styles.css` | 修改 | `.activity-knowledge` 与 `.knowledge-badge` 样式 |
+| `.env.example` | 修改 | 补充 `TRAVELMIND_KNOWLEDGE=off` |
+| `tests/test_knowledge_retrieval.py` | 新增 | 检索器、flag 灰度、富化、refine 保持性 |
+| `tests/test_mcp_protocol.py` | 修改 | 内存 FastMCP server 增加 `kb_retrieve` dict 往返用例 |
+| `tests/evals/fixtures.py` | 修改 | `FixtureToolbox` 增加 `kb_retrieve` 分支与 `kb_covered` 开关 |
+| `tests/evals/test_knowledge_eval.py` | 新增 | 知识库专用评测场景（4 个）与可观测指标 |
+| `docs/findings.md`、`docs/project-baseline.md` | 修改 | 记录设计、验证结果与观察项 |
+
+### 验证
+- [x] `py_compile` 通过（sync、async、tests 全量）
+- [x] `node --check web/app.js` 通过
+- [x] 全量单测 252/252 通过（原 220 + 新增 32）
+- [x] 离线评测重新生成与库内 `phase3_report.json` aggregate 完全一致（139 次调用、4 次 fixture 失败、七项指标平均值逐一相同）
+- [x] 发布质量门通过（关键指标无回退）
+- [x] Playwright E2E 11 通过 / 1 跳过，与既有基线一致
+- [x] 真实验收：8098 + 8010 双服务、`TRAVELMIND_KNOWLEDGE=on`，广州→深圳 2 天规划成功；知识库命中 3/24 候选，两个室内项正好匹配「优先室内场所」freeText
+
+### 备注
+- 知识库只补背景知识与解释，不引入地点、坐标、票价、库存或班次；候选 `place_source` 仍是 `amap_poi`，真实地点护栏不受影响，契约层零改动。
+- 语料原计划放 `sync/multi_agent/knowledge/`，但会经 `multi_agent/__init__.py` 把 langchain 拖进 MCP Server 进程，遂改为 `sync/knowledge/` 与 `multi_agent` 平级。
+- `TRAVELMIND_KNOWLEDGE` 默认 off，关闭时零工具调用、计划与现状逐字段一致；flag 翻默认时需合并评测场景并重定基线（做法见 findings.md 观察项 3）。
+- 下一步：扩张语料覆盖（当前 9 城是命中率的主要上限）。
+
+---
+
 ## 格式模板
 
 <!-- 复制下方模板到顶部，填入内容后删除本注释 -->

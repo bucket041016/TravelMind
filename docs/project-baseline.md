@@ -61,6 +61,8 @@ flowchart LR
 | `sync/fastmcp_server_streamhttp.py` | FastMCP HTTP Server、高德调用、缓存限速、备用数据、文件输出 | 当前 MCP 入口 |
 | `sync/mcp_tools_adapter.py` | FastMCP Client、`MCPToolResult` 稳定封装、`call_mcp_tool`/`call_mcp_tool_result` 双 API 与 LangChain 工具包装；构造参数接受 FastMCP 实例支持内存直连 | 连接层，D12 已闭环（2026-09-05） |
 | `sync/multi_agent/structured_planner.py` | 结构化规划编排器（约 660 行），业务逻辑已拆分到同目录 20 个模块 | 当前核心业务模块 |
+| `sync/knowledge/` | 目的地知识库语料（`cities/*.json`，9 城）与纯 Python 关键词检索器 | 知识库检索（`TRAVELMIND_KNOWLEDGE`，默认 off） |
+| `sync/multi_agent/knowledge_service.py` | 知识库检索消费者：flag、候选匹配与富化，只挂可选字段不改 `place_source` | 规划侧知识库接线 |
 | `sync/multi_agent/contracts.py` | 地点、酒店、路线、天气和来源元数据 Contract，含 `stable_place_id` 稳定 id | Phase 2 事实边界 |
 | `sync/multi_agent/fact_normalizer.py` | 将旧文本解析结果归一化为 JSON-safe 事实 | Phase 2 兼容层 |
 | `sync/multi_agent/candidate_ranker.py` | 候选硬过滤、评分、排序和入选/落选理由 | Phase 2 纯逻辑层 |
@@ -106,7 +108,7 @@ flowchart LR
 }
 ```
 
-主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`candidate_contracts`、`map`、`budget`、`budget_adjustments`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 新增可选 `candidate_contracts`（2026-09-05 已在 `run()` 接线，见工程债务 D2），旧 `pois`/`hotels` 字段继续保留；Phase 3 新增可选 `budget_adjustments`（同步写 `budget.adjustments`）与 `quality_review.gate_violations`（2026-09-05）。
+主要响应字段：`plan_id`、`preferences`、`intercity_transport`、`local_transport`、`hotels`、`weather`、`weather_advice`、`pois`、`candidate_contracts`、`map`、`budget`、`budget_adjustments`、`itinerary_days`、`quality_review`、`markdown`、`trace`、`planning_mode`、`llm_status`。Phase 1 新增的可选结果包括 `preferences.freeText`、`preferences.hardConstraints`、`preferences.softPreferences`、`preferences.constraintSummary` 和 `quality_review.constraints`；Phase 2 新增可选 `candidate_contracts`（2026-09-05 已在 `run()` 接线，见工程债务 D2），旧 `pois`/`hotels` 字段继续保留；Phase 3 新增可选 `budget_adjustments`（同步写 `budget.adjustments`）与 `quality_review.gate_violations`（2026-09-05）；知识库检索新增可选 `knowledge`（`provider_status`/`city_guide`/`matched`/`matched_count`/`candidate_count`/`note`），候选上新增可选 `knowledge` 与 `knowledge_detail`，行程项新增可选 `knowledge_detail` 与 `detail_source`（`knowledge_base`/`amap_description`/`llm`）。
 
 `constraintSummary` 按 `hard`、`soft`、`unknown` 分组；每项保留 `id`、`kind`、`text`、`source`。质量评审逐项给出 `satisfied`、`violated` 或 `unknown`，并附 `evidence`。
 
@@ -145,10 +147,13 @@ flowchart LR
 - `plan_route`
 - `search_poi`
 - `search_hotels`
+- `kb_retrieve`
 - `estimate_budget`
 - `write_itinerary_file`
 
 高德调用集中经过缓存、最小请求间隔、QPS 错误识别和退避重试。天气优先高德，随后使用 `wttr.in`；POI 与酒店优先高德，随后使用本地知识或规则。
+
+`kb_retrieve` 是知识库检索工具（`TRAVELMIND_KNOWLEDGE` 控制规划链路是否消费，工具本身常开）：返回人工策展的城市攻略与景点详情，供结构化规划器绑定到已入选的高德候选上。它是第一个返回结构化 `dict` 的生产工具——适配器经 `call_structured()` 直接拿到 `source="structured_data"`，不必走文本正则。红线：知识库只补背景知识与解释（亮点、建议时长、预约购票规则、室内/雨天替代、本地贴士），**不引入地点、坐标、票价、库存或班次**，因此候选的 `place_source` 仍是 `amap_poi`，真实地点护栏不受影响。语料在 `sync/knowledge/cities/*.json`（9 城），检索器是 `sync/knowledge/retriever.py` 的纯 Python 关键词打分，零新依赖、完全确定性。规划侧消费者是 `sync/multi_agent/knowledge_service.py`，每次规划只发一次检索调用。
 
 适配器把每次工具调用收敛为 `MCPToolResult` 稳定封装（`text` 恒可用、结构化 `data`、`source` 与 `validation_error`）；工具箱提供 `call_text()`（恒字符串）/`call_structured()`（显式取数据）双访问。当前 MCP 工具仍返回文本，结构化消费路径由 `tests/test_mcp_protocol.py` 的内存 FastMCP 协议级测试保障。
 
@@ -220,6 +225,8 @@ E2E 覆盖桌面（1280x720）与移动（iPhone 14 视口）两个 project：�
 
 - 改 API 或静态地图：`sync/travel_web_app.py`
 - 改高德/备用工具：`sync/fastmcp_server_streamhttp.py`
+- 改知识库语料或检索打分：`sync/knowledge/`
+- 改知识库接线与开关：`sync/multi_agent/knowledge_service.py`
 - 改结构化规划和规则：`sync/multi_agent/structured_planner.py`
 - 改追问多 Agent：`sync/multi_agent/orchestrator.py` 及同目录 Agent
 - 改页面骨架：`web/index.html`

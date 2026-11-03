@@ -290,12 +290,27 @@ MCP Server 以空 `AMAP_*` 环境变量重启（空值优先于 .env）。耗时
 - **发布质量门**：`release_gate.compare()` 是纯函数，默认参照 `phase3_report.json` 在仓库内，干净 clone 可复现；`total_calls` 排除（成本非质量）；缺失/None 指标跳过；退出码 0/1/2。四条指标阈值见 `METRIC_RULES`。
 - **验证**：E2E 11 通过 / 1 跳过（桌面跳过移动专属溢出断言），3.1m；全量单测 220/220；发布质量门通过；py_compile、`node --check`、`git diff --check`、pip check 通过。观察项：单用例耗时波动大（4.5s-49s），疑似 `.glass-panel` 的 `backdrop-filter: blur(18px)` 在无头软件渲染下的重绘成本，暂不影响通过但值得后续关注。
 
+## 知识库检索（2026-11-01）
+
+- 动机：`_materialize_llm_itinerary`（`itinerary_builder.py`）里 `title`/`detail`/`duration`/`transport`/每日 `theme`/价格区间全部由 DeepSeek 自由生成，景点详情这类事实模型只能编。`open-source-comparison.md:112` 早已把「RAG | 当前没有目的地知识库」列为 P1 缺口，目标架构也留了 `RESEARCH --> KNOWLEDGE` 槽位；本步把它落成实现。
+- 形态：新增第 10 个 MCP 工具 `kb_retrieve`，返回结构化 `dict`（**第一个返回 dict 的生产工具**，其余 9 个仍是 `-> str`）。适配器经 `call_structured()` 直接拿到 `source="structured_data"`，不必走 `_parse_numbered_section` 那套正则——正是 Phase 2 一直在消灭的脆弱点。内存 FastMCP 与真实 streamable-http 两条路径都已验证 dict 往返。
+- 检索实现：`sync/knowledge/`（语料 9 城 JSON + 纯 Python 关键词打分）。零新依赖（`requirements.txt` 未动，venv 里只有 numpy/tiktoken），检索结果完全确定，离线评测不需要 fixture 化网络。语料原计划放 `sync/multi_agent/knowledge/`，但那样会把 `multi_agent/__init__.py`（连带 langchain）拖进 MCP Server 进程，遂改为 `sync/knowledge/` 与 `multi_agent` 平级。
+- 接线位置：`run()` 里 `_enrich_place_clusters` 之后、`_build_candidate_contracts` 之前新增 `KnowledgeAgent 知识库检索` 步骤——此时 `pois["attractions"]` 已是 `rank_candidates` 选出的入选集，知识库只需给已选候选补详情。每次规划只发一次检索调用（`kb_retrieve(city, limit=12)` 后本地按名称/别名匹配），不做 N+1。
+- 红线执行：知识库只补背景知识与解释，不引入地点、坐标、票价、库存或班次。候选的 `place_source` 仍是 `amap_poi`，`metrics.py` 的 `_bound_real`、`budget_calculator`、`map_builder` 的判定全部不受影响；`contracts.py:126` 早有 `"knowledge_base"` 的 `SourceKind` 映射，契约层零改动。事实性描述走新增可选字段 `knowledge_detail`，模型自由文字 `detail` 保留但降级为「规划建议」，前端优先渲染知识库详情。
+- 灰度：`TRAVELMIND_KNOWLEDGE` 默认 off，关闭时 `_build_knowledge` 直接返回 `{}` 且不发工具调用。
+- 验证：全量单测 220 → 252（新增 32：检索器/flag/富化/refine/协议往返/评测）；离线评测重新生成 `baseline_report` 与库内 `phase3_report.json` 的 aggregate **完全一致**（10 场景、139 次调用、4 次 fixture 失败、七项指标平均值逐一相同），发布质量门通过；E2E 11 通过 / 1 跳过与既有基线一致；py_compile、`node --check` 通过。
+- 真实验收（8098 + 8010 双服务，`TRAVELMIND_KNOWLEDGE=on`，广州→深圳 2 天）：真实 DeepSeek `deepseek_hybrid`/`used`；知识库命中 3/24 个真实高德候选，其中 `华侨城创意园` 与 `海上世界文化艺术中心` 两个室内项正好对应用户 freeText「优先室内场所」；2 个行程项挂上 `knowledge_detail`，`place_source` 未变；`/api/tools` 列出 11 个工具（含 `kb_retrieve`）；Markdown 导出含「知识库详情」行。
+- 观察项 1：语料只覆盖 9 城，其余目的地 `provider_status=not_covered` 静默跳过，命中率依赖语料扩张；这是当前最主要的效果上限。
+- 观察项 2：`_planning_brain_payload` 的 `poi_contracts` 分支在 `run()` 中仍是死分支（只有测试注入），因此知识库富化实际走的是 `pois["attractions"]/["foods"]/["specialty_places"]` 直读路径；`candidate_contracts` 在生产链路里仍是空列表，不影响本次改动。
+- 观察项 3：评测场景另建 `build_knowledge_scenarios()`（4 个）而没有并进 `build_scenarios()`，因为后者被 4 处硬编码断言和已提交的 `phase3_report.json` 钉死；等 flag 翻成默认开启时再合并并重定基线（做法：改 `test_baseline_eval.py` 的场景数/调用数、`run_baseline --suite` 生成新参照、更新 `release_gate.DEFAULT_REFERENCE`）。
+
 ## 续接摘要（下一次继续入口）
 
 ### 最近决定与当前状态
 
 - 2026-11-01：产品主线 Phase 0-5 全部完成，无未关闭阶段。最后两个小步 5.5（Playwright E2E，桌面+移动双 project、六个场景）与 5.6（发布质量门，对照仓库内 `phase3_report.json`）已提交 `9e5353c`；同批还有 SSE 终态顺序修复 `f78f9b9`（快照与 mark_task 先落库、done 事件最后写）和一批死代码清理 `dabc91c`。当前状态：E2E 11 通过/1 跳过、单测 220/220、发布质量门通过。`.dsh/` 仍保持未跟踪。
 - 遗留事项优先级：D1（MCPToolAdapter 连接复用，Phase 2.5 唯一硬前置）> D3（前端展示来源/落选理由）> D6（`app.js` 拆 ES modules，建议在下次大改前端前做）> D7 剩余 fetch 超时 > D4/D5/D8/D9/D10 低风险清理。
+- 2026-11-01 新增：知识库检索已落地（`kb_retrieve` 工具 + `sync/knowledge/` 语料 9 城 + `knowledge_service` 接线 + `TRAVELMIND_KNOWLEDGE` 默认 off），单测 252、发布门与 E2E 均无回退。下一步优先事项是**扩张语料覆盖**（当前 9 城是命中率的主要上限）与决定 flag 何时翻成默认开启；翻默认时需要合并评测场景并重定基线，做法见上文观察项 3。
 - 产品主线顺序已经修订为：离线基线 -> 约束进入结构化规划 -> 候选 JSON Contract/排序（稳定 id 事实层）-> 预算反馈与全局质量门 -> 结构化追问版本 -> 持久化与真实任务事件 -> 端到端与发布质量门。工具增强规划脑是可选 Phase 2.5 支线，不再阻塞任何主线阶段。
 - Phase 0 已建立 10 个固定场景、141 次 fixture 调用、4 次工具 fixture 故障和 7 类指标（基线见上）。
 - Phase 1 已完成：请求模型和前端 payload 传递自由文本/硬约束/软偏好；归一化生成 `constraintSummary`；规划脑、规则路径和质量评审共用摘要；`quality_review.constraints` 提供状态和证据；前端展示逐条约束检查。
