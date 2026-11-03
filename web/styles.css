@@ -854,6 +854,35 @@ svg {
   line-height: 1.55;
 }
 
+/* 知识库详情（TRAVELMIND_KNOWLEDGE）：事实性描述，视觉上优先于模型自由文字 */
+.activity-knowledge {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.activity-knowledge .knowledge-badge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line, rgba(15, 23, 42, 0.14));
+  border-radius: 999px;
+  background: rgba(56, 132, 255, 0.1);
+  color: #2563eb;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.activity-detail.secondary {
+  margin-top: 4px;
+  color: var(--ink-faint, var(--ink-soft));
+  font-size: 12px;
+}
+
 .arrival-segment {
   display: grid;
   gap: 3px;

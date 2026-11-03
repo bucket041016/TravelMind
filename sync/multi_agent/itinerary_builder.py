@@ -25,6 +25,7 @@ from .poi_service import (
     _poi_key,
     _take_unused_poi_for_cluster,
 )
+from .knowledge_service import knowledge_detail_text
 
 def _default_hotel_area(prefs: dict) -> str:
     return f"建议住在{prefs['destinationCity']}核心商圈、地铁枢纽或第一天重点景点附近，减少换乘和搬运行李。"
@@ -156,6 +157,7 @@ def _timeline_item(
     ai_price_range: dict[str, Any] | None = None,
     ai_price_note: str = "",
     ai_price_confidence: str = "medium",
+    knowledge_detail: str = "",
 ) -> dict[str, Any]:
     poi = poi or {}
     poi_cost = poi.get("cost")
@@ -207,6 +209,10 @@ def _timeline_item(
         "is_real_place": real_place,
         "place_source": source,
         "validation_note": validation_note,
+        "knowledge_detail": knowledge_detail,
+        "detail_source": (
+            "knowledge_base" if knowledge_detail else ("amap_description" if poi.get("description") else "llm")
+        ),
     }
 
 def _retime_day_items(day: dict[str, Any]) -> None:
@@ -252,6 +258,8 @@ def _note_item(day_number: int, slot: str, title: str, detail: str) -> dict[str,
         "is_real_place": False,
         "place_source": "planning_note",
         "validation_note": "",
+        "knowledge_detail": "",
+        "detail_source": "llm",
     }
 
 def _build_deepseek_itinerary_days(
@@ -263,8 +271,11 @@ def _build_deepseek_itinerary_days(
     pois: dict[str, Any],
     weather: dict[str, str],
     weather_advice: dict[str, str],
+    knowledge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload, lookup = _planning_brain_payload(prefs, routes, local_transport, hotels, pois, weather, weather_advice)
+    payload, lookup = _planning_brain_payload(
+        prefs, routes, local_transport, hotels, pois, weather, weather_advice, knowledge
+    )
     brain_result = self.deepseek_brain.plan(payload)
     if brain_result.get("llm_status") != "used":
         return {
@@ -284,6 +295,7 @@ def _build_deepseek_itinerary_days(
         local_transport,
         hotels,
         lookup,
+        knowledge,
     )
     item_count = sum(len(day.get("items", [])) for day in itinerary_days)
     if item_count < max(2, prefs["days"] * 2):
@@ -303,6 +315,31 @@ def _build_deepseek_itinerary_days(
         "itinerary_days": itinerary_days,
     }
 
+def _city_knowledge_for_prompt(knowledge: dict[str, Any] | None) -> dict[str, Any]:
+    """从知识库结果里取出可进 prompt 的城市级背景；未开启或未覆盖时返回空 dict。"""
+    if not isinstance(knowledge, dict) or knowledge.get("provider_status") != "knowledge_base":
+        return {}
+    guide = knowledge.get("city_guide") or {}
+    return {
+        "summary": str(guide.get("summary") or ""),
+        "practical_tips": [str(item) for item in guide.get("practical_tips") or []],
+        "seasonal": [item for item in guide.get("seasonal") or [] if isinstance(item, dict)],
+    }
+
+
+def _knowledge_day_theme(knowledge: dict[str, Any] | None, day_number: int, destination: str) -> str:
+    """模型未给 theme 时，用知识库分区建议兜底，替代原先的通用串。"""
+    guide = (knowledge or {}).get("city_guide") or {}
+    districts = [item for item in guide.get("districts") or [] if isinstance(item, dict)]
+    if not districts:
+        return ""
+    district = districts[(max(day_number, 1) - 1) % len(districts)]
+    name = str(district.get("name") or "").strip()
+    if not name:
+        return ""
+    return f"{destination}{name}片区深度游"
+
+
 def _planning_brain_payload(
     prefs: dict[str, Any],
     routes: dict[str, Any],
@@ -311,6 +348,7 @@ def _planning_brain_payload(
     pois: dict[str, Any],
     weather: dict[str, str],
     weather_advice: dict[str, str],
+    knowledge: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     candidates = []
     lookup: dict[str, dict[str, Any]] = {}
@@ -351,12 +389,36 @@ def _planning_brain_payload(
                     "price_note": item.get("cost_note") or "",
                     "type": item.get("type", ""),
                     "description": str(item.get("description") or "")[:160],
+                    "knowledge_highlights": [
+                        str(item) for item in (item.get("knowledge") or {}).get("highlights") or []
+                    ],
+                    "knowledge_duration": str((item.get("knowledge") or {}).get("suggested_duration") or ""),
+                    "knowledge_booking": str((item.get("knowledge") or {}).get("booking") or ""),
+                    "knowledge_ticket": str((item.get("knowledge") or {}).get("ticket") or ""),
+                    "knowledge_indoor": bool((item.get("knowledge") or {}).get("indoor")),
+                    "knowledge_rainy_alternative": bool((item.get("knowledge") or {}).get("rainy_alternative")),
                     "cluster_id": item.get("cluster_id", ""),
                     "cluster_name": item.get("cluster_name", ""),
                     "nearby_anchor": item.get("nearby_anchor", ""),
                     "selection": item.get("selection"),
                 }
             )
+
+    city_knowledge = _city_knowledge_for_prompt(knowledge)
+    constraints = [
+        "真实地点必须使用 candidate_id",
+        "可以给少量泛化体验建议，但 is_suggestion 必须为 true",
+        "不要编造航班号、车次、实时票价、余票、酒店库存或门票库存",
+        "最后一天返程交通只作为 transfer，不要把住宿区域建议写进返程 item 的 location 或 detail",
+        "高德没有 cost 的景点/活动，只有明确可能收费时才输出正价 estimated_price_range；免费开放或无法判断收费时输出 0-0，并标注需核实",
+        *(prefs.get("hardConstraints") or []),
+        *(prefs.get("softPreferences") or []),
+    ]
+    if city_knowledge:
+        constraints.append(
+            "候选若带 knowledge_* 字段，其中的建议时长、预约购票规则、室内与雨天替代属性是已核实事实，"
+            "优先直接采用，不要另行编造；detail 只写你自己的规划理由，不要复述或改写这些事实。"
+        )
 
     payload = {
         "preferences": prefs,
@@ -377,20 +439,13 @@ def _planning_brain_payload(
         "weather": weather,
         "weather_advice": weather_advice,
         "candidates": candidates,
+        "city_knowledge": city_knowledge,
         "cluster_guidance": [
             "每天优先围绕 1 个 primary_cluster 安排活动，最多补充 1 个相邻片区",
             "不要把相距很远的 cluster 硬排在同一天相邻时段",
             "餐饮优先匹配当天主片区或酒店片区",
         ],
-        "constraints": [
-            "真实地点必须使用 candidate_id",
-            "可以给少量泛化体验建议，但 is_suggestion 必须为 true",
-            "不要编造航班号、车次、实时票价、余票、酒店库存或门票库存",
-            "最后一天返程交通只作为 transfer，不要把住宿区域建议写进返程 item 的 location 或 detail",
-            "高德没有 cost 的景点/活动，只有明确可能收费时才输出正价 estimated_price_range；免费开放或无法判断收费时输出 0-0，并标注需核实",
-            *(prefs.get("hardConstraints") or []),
-            *(prefs.get("softPreferences") or []),
-        ],
+        "constraints": constraints,
         "constraint_summary": prefs.get("constraintSummary") or {},
     }
     return payload, lookup
@@ -402,6 +457,7 @@ def _materialize_llm_itinerary(
     local_transport: dict[str, Any],
     hotels: dict[str, Any],
     lookup: dict[str, dict[str, Any]],
+    knowledge: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     raw_days = plan.get("days") if isinstance(plan.get("days"), list) else []
     day_lookup = {}
@@ -419,7 +475,11 @@ def _materialize_llm_itinerary(
     for day_number in range(1, prefs["days"] + 1):
         raw_day = day_lookup.get(day_number, {})
         date_text = (current_date + timedelta(days=day_number - 1)).isoformat() if current_date else ""
-        theme = str(raw_day.get("theme") or ("抵达适应 + 城市体验" if day_number == 1 else f"{prefs['destinationCity']}深度体验"))
+        theme = str(raw_day.get("theme") or "")
+        if not theme:
+            theme = _knowledge_day_theme(knowledge, day_number, prefs["destinationCity"]) or (
+                "抵达适应 + 城市体验" if day_number == 1 else f"{prefs['destinationCity']}深度体验"
+            )
         raw_items = raw_day.get("items") if isinstance(raw_day.get("items"), list) else []
         items = []
 
@@ -449,6 +509,7 @@ def _materialize_llm_itinerary(
                     item_category = candidate_category
                 title = str(raw_item.get("title") or f"{candidate['name']}体验")
                 detail = str(raw_item.get("detail") or candidate.get("description") or "根据 DeepSeek 智能规划，从高德候选中选择的真实地点。")
+                knowledge_detail = knowledge_detail_text(candidate.get("knowledge") if isinstance(candidate.get("knowledge"), dict) else {})
                 ai_price_range = _parse_price_range(raw_item.get("estimated_price_range"))
                 item = _timeline_item(
                     day_number,
@@ -468,6 +529,7 @@ def _materialize_llm_itinerary(
                     ai_price_range=ai_price_range,
                     ai_price_note=str(raw_item.get("price_note") or ""),
                     ai_price_confidence=str(raw_item.get("price_confidence") or "medium"),
+                    knowledge_detail=knowledge_detail,
                 )
             else:
                 item = _llm_suggestion_item(
@@ -649,6 +711,8 @@ def _llm_suggestion_item(
         "is_real_place": False,
         "place_source": "llm_suggestion",
         "validation_note": note,
+        "knowledge_detail": "",
+        "detail_source": "llm",
     }
 
 def _build_itinerary_days(

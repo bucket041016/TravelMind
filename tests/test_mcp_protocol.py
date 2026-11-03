@@ -129,6 +129,45 @@ def _build_protocol_server() -> FastMCP:
         """预算文本工具（旧链路回归用）。"""
         return f"{origin} -> {destination} {days}天{travelers}人预算估算（{hotel_level}档）：总计：约 600 元。"
 
+    @server.tool()
+    def kb_retrieve(city: str, query: str = "", limit: int = 8) -> dict:
+        """知识库检索工具（真实 server 的 kb_retrieve 形态：结构化 dict 返回）。"""
+        if city not in {"深圳", "广州"}:
+            return {
+                "provider_status": "not_covered",
+                "city": city,
+                "query": query,
+                "city_guide": None,
+                "entries": [],
+                "coverage": "none",
+                "note": "本地知识库暂未覆盖该目的地。",
+            }
+        entries = [
+            {
+                "name": "深圳湾公园",
+                "aliases": [],
+                "district": "南山区",
+                "highlights": ["滨海长廊"],
+                "suggested_duration": "2-3 小时",
+                "best_time": "傍晚",
+                "booking": "免预约，免费开放",
+                "ticket": "免费",
+                "indoor": False,
+                "rainy_alternative": False,
+                "keywords": ["海滨"],
+                "note": "海边日晒强。",
+            }
+        ]
+        return {
+            "provider_status": "knowledge_base",
+            "city": city,
+            "query": query,
+            "city_guide": {"city": city, "summary": "带状沿海城市。", "districts": [], "practical_tips": [], "seasonal": []},
+            "entries": entries[: max(0, int(limit))],
+            "coverage": "full",
+            "note": "知识库为人工策展的背景知识。",
+        }
+
     return server
 
 
@@ -151,6 +190,22 @@ class TravelMindMcpProtocolTests(unittest.TestCase):
         self.assertIsInstance(result.data, dict)
         self.assertIn("attractions", result.data)
         self.assertEqual(json.loads(result.text), result.data)
+
+    def test_kb_retrieve_returns_structured_data(self):
+        result = self._adapter().call_mcp_tool_result("kb_retrieve", city="深圳", limit=1)
+        self.assertEqual(result.source, "structured_data")
+        self.assertIsInstance(result.data, dict)
+        self.assertEqual(result.data["provider_status"], "knowledge_base")
+        self.assertEqual([item["name"] for item in result.data["entries"]], ["深圳湾公园"])
+        self.assertIn("summary", result.data["city_guide"])
+        self.assertEqual(json.loads(result.text), result.data)
+
+    def test_kb_retrieve_uncovered_city_is_structured_not_covered(self):
+        result = self._adapter().call_mcp_tool_result("kb_retrieve", city="拉萨")
+        self.assertEqual(result.source, "structured_data")
+        self.assertEqual(result.data["provider_status"], "not_covered")
+        self.assertEqual(result.data["coverage"], "none")
+        self.assertEqual(result.data["entries"], [])
 
     def test_bad_elements_filtered_in_structured_poi(self):
         result = self._adapter().call_mcp_tool_result("search_poi", city="深圳", preference="经典景点")

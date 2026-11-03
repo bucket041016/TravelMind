@@ -16,6 +16,11 @@ from fastmcp import FastMCP
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
+try:
+    from knowledge import retrieve as retrieve_knowledge
+except ModuleNotFoundError:  # pragma: no cover - 包方式导入时回退
+    from sync.knowledge import retrieve as retrieve_knowledge
+
 mcp = FastMCP(name="travel-agent-mcp")
 
 AMAP_API_BASE = "https://restapi.amap.com"
@@ -1606,6 +1611,36 @@ def estimate_budget(origin: str, destination: str, days: int = 2, travelers: int
         f"餐饮：约 {food_total} 元；门票/体验：约 {ticket_total} 元；"
         f"市内交通：约 {local_total} 元；总计：约 {total} 元。"
     )
+
+
+@mcp.tool()
+def kb_retrieve(city: str, query: str = "", limit: int = 8) -> dict:
+    """从人工策展的目的地知识库检索城市攻略与景点详情，用于补充高德不提供的背景事实。
+
+    知识库只提供背景知识与解释（亮点、建议时长、预约规则、室内/雨天替代、本地贴士），
+    不提供地点坐标、实时价格、库存或班次；真实地点与坐标仍由高德 POI 工具负责。
+
+    Args:
+        city (str): 目的地城市，例如 "深圳"。
+        query (str): 可选检索词。为空时返回该城市攻略与全部景点条目；
+            传入景点名时返回该景点及其相关条目的详情。
+        limit (int): 返回条目上限，默认 8。
+
+    Returns:
+        dict: 城市攻略、命中条目与来源状态；城市未覆盖时 provider_status 为 not_covered。
+    """
+    try:
+        return retrieve_knowledge(city, query=query, limit=limit)
+    except Exception as exc:  # noqa: BLE001 - 工具不抛异常，降级为未覆盖
+        return {
+            "provider_status": "not_covered",
+            "city": str(city or ""),
+            "query": str(query or ""),
+            "city_guide": None,
+            "entries": [],
+            "coverage": "none",
+            "note": f"知识库检索失败：{exc}",
+        }
 
 
 @mcp.tool()

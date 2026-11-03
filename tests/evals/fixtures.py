@@ -26,6 +26,7 @@ class EvalScenario:
     duplicate_activity: bool = False
     contaminated_return: bool = False
     far_points: bool = False
+    kb_covered: bool = True
     expected: dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,6 +59,8 @@ class FixtureToolbox:
             return self._local_route_response(modes)
         if tool_name == "estimate_budget":
             return "预算参考：按高德候选和规则估算。"
+        if tool_name == "kb_retrieve":
+            return self._kb_response()
         return "fixture response"
 
     def call_text(self, tool_name: str, **kwargs: Any) -> str:
@@ -65,6 +68,63 @@ class FixtureToolbox:
 
     def call_structured(self, tool_name: str, **kwargs: Any) -> MCPToolResult:
         return MCPToolResult.from_value(tool_name, self.call(tool_name, **kwargs))
+
+    def _kb_response(self) -> dict[str, Any]:
+        """知识库检索的罐头返回：与 kb_retrieve 工具契约同形，覆盖 fixture 里的景点名。"""
+        city = str(self.scenario.payload.get("destinationCity") or "深圳")
+        if not self.scenario.kb_covered:
+            return {
+                "provider_status": "not_covered",
+                "city": city,
+                "query": "",
+                "city_guide": None,
+                "entries": [],
+                "coverage": "none",
+                "note": "本地知识库暂未覆盖该目的地，已跳过知识检索；行程事实仍以高德候选为准。",
+            }
+
+        def entry(name: str, **overrides: Any) -> dict[str, Any]:
+            base = {
+                "name": name,
+                "aliases": [],
+                "district": "南山区",
+                "highlights": [f"{name}的核心看点一", f"{name}的核心看点二"],
+                "suggested_duration": "2-3 小时",
+                "best_time": "傍晚",
+                "booking": "免预约，免费开放",
+                "ticket": "免费",
+                "indoor": False,
+                "rainy_alternative": False,
+                "keywords": ["海滨", "免费"],
+                "note": f"{name}的人工策展备注。",
+            }
+            base.update(overrides)
+            return base
+
+        return {
+            "provider_status": "knowledge_base",
+            "city": city,
+            "query": "",
+            "city_guide": {
+                "city": city,
+                "summary": f"{city}是带状沿海城市，核心游览区集中在福田-罗湖老城、南山科技园-深圳湾和盐田-东部海滨三条线上。",
+                "districts": [
+                    {"name": "南山区", "character": "深圳湾海滨与文创园集中。", "best_for": ["海滨", "文创园"]},
+                    {"name": "福田区", "character": "市中心与地铁枢纽密集。", "best_for": ["博物馆", "住宿"]},
+                ],
+                "practical_tips": ["跨区优先地铁而非打车。", "多数博物馆周一闭馆，需提前预约。"],
+                "seasonal": [{"months": "6-9", "advice": "午后多雷雨，户外安排在上午或傍晚。"}],
+            },
+            "entries": [
+                entry("深圳湾公园"),
+                entry("世界之窗", indoor=False, booking="需提前购票", ticket="分日场与夜场售票"),
+                entry("华侨城创意园", indoor=True, rainy_alternative=True, suggested_duration="1.5-2.5 小时"),
+                entry("莲花山公园"),
+                entry("海上世界文化艺术中心", indoor=True, rainy_alternative=True, booking="展览需预约，周一闭馆"),
+            ],
+            "coverage": "full",
+            "note": "知识库为人工策展的背景知识，仅用于补充景点详情与本地规则。",
+        }
 
     def _poi_response(self) -> str:
         city = str(self.scenario.payload.get("destinationCity") or "深圳")
@@ -410,5 +470,41 @@ def build_scenarios() -> list[EvalScenario]:
                 preferenceProfile={"pace": "标准", "maxTransferMinutes": 45, "hotelStrategy": "近商圈", "learnedHints": []},
             ),
             expected={"free_text_preserved": True, "no_night_activity": True},
+        ),
+    ]
+
+
+def build_knowledge_scenarios() -> list[EvalScenario]:
+    """知识库检索专用场景：与 build_scenarios() 分开，避免改动已定基线的 10 场景与调用数。
+
+    这些场景由 tests/evals/test_knowledge_eval.py 驱动，运行前会显式设置
+    TRAVELMIND_KNOWLEDGE；知识库只做背景补充，不引入地点、坐标、票价或库存。
+    """
+    return [
+        EvalScenario(
+            "knowledge_rainy_indoor",
+            _payload(
+                freeText="下雨时只安排室内展馆和餐厅，避免长距离步行。",
+                interests=["室内展馆", "美食"],
+                preferenceProfile={"pace": "标准", "maxTransferMinutes": 35, "hotelStrategy": "近地铁枢纽", "learnedHints": []},
+            ),
+            weather="小雨，24-27°C，风力 3 级",
+            expected={"knowledge_matched": True, "knowledge_indoor_available": True},
+        ),
+        EvalScenario(
+            "knowledge_booking_rules",
+            _payload(days=2),
+            expected={"knowledge_matched": True, "knowledge_booking_present": True},
+        ),
+        EvalScenario(
+            "knowledge_not_covered",
+            _payload(days=2),
+            kb_covered=False,
+            expected={"knowledge_not_covered": True},
+        ),
+        EvalScenario(
+            "knowledge_flag_off",
+            _payload(days=2),
+            expected={"knowledge_flag_off": True},
         ),
     ]

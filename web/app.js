@@ -1468,6 +1468,13 @@ function timelineItemDetail(item = {}) {
   return item.detail || "";
 }
 
+// 知识库详情（TRAVELMIND_KNOWLEDGE 开启时后端附带）：事实性描述优先于模型自由文字。
+function renderKnowledgeDetail(item = {}) {
+  const text = String(item.knowledge_detail || "").trim();
+  if (!text) return "";
+  return `<p class="activity-knowledge"><span class="knowledge-badge">知识库</span>${escapeHtml(text)}</p>`;
+}
+
 function timelineItemTransport(item = {}) {
   const raw = String(item.transport || "");
   if (["rail", "flight", "driving", "transit", "walking", "bicycling", "taxi"].includes(raw)) return modeLabel(raw);
@@ -1507,7 +1514,8 @@ function renderTimelineItem(item, dayIndex, itemIndex, count) {
           }
         </div>
         ${renderArrivalSegment(item.arrival_transport_segment)}
-        <p class="activity-detail">${escapeHtml(displayDetail)}</p>
+        ${renderKnowledgeDetail(item)}
+        <p class="activity-detail ${item.knowledge_detail ? "secondary" : ""}">${escapeHtml(displayDetail)}</p>
         <div class="activity-meta">
           <span>交通：${escapeHtml(displayTransport)}</span>
           <span>耗时：${escapeHtml(item.duration || "")}</span>
@@ -2222,6 +2230,9 @@ function buildMarkdownFromPlan(data) {
     lines.push(`- 第 ${day.day} 天 ${day.date || ""}：${day.theme || ""}`);
     (day.items || []).forEach((item) => {
       lines.push(`  - ${item.time}｜${item.title}｜${item.location || ""}｜交通：${item.transport || ""}｜${item.detail || ""}`);
+      if (item.knowledge_detail) {
+        lines.push(`    - 知识库详情：${item.knowledge_detail}`);
+      }
       if (item.arrival_transport_segment) {
         const segment = item.arrival_transport_segment;
         lines.push(
@@ -2432,6 +2443,7 @@ const BACKEND_STEP_TO_STAGE = {
   WeatherAdviceAgent: 2,
   IntercityTransportAgent: 1,
   POIAgent: 3,
+  KnowledgeAgent: 3,
   HotelAgent: 4,
   LocalMobilityAgent: 5,
   DeepSeekPlanningBrainAgent: 5,

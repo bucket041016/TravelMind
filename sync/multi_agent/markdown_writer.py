@@ -63,6 +63,8 @@ def _build_markdown(
         lines.append(f"- 第 {day['day']} 天 {day.get('date', '')}：{day['theme']}")
         for item in day.get("items", []):
             lines.append(f"  - {item['time']}｜{item['title']}｜交通：{item['transport']}｜{item['detail']}")
+            if item.get("knowledge_detail"):
+                lines.append(f"    - 知识库详情：{item['knowledge_detail']}")
             segment = item.get("arrival_transport_segment")
             if segment:
                 mode_label = segment.get("mode_label") or MODE_LABELS.get(segment.get("mode"), segment.get("mode", ""))

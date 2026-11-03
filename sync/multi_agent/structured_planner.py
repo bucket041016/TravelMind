@@ -90,6 +90,7 @@ from .poi_service import (
     _take_unused_poi,
     _take_unused_poi_for_cluster,
 )
+from .knowledge_service import _build_knowledge
 from .local_transport_service import (
     _amap_local_segment,
     _annotate_route_judgement,
@@ -210,6 +211,14 @@ class StructuredTravelPlanner:
         hotels = self._record(trace, "HotelAgent 住宿匹配", prefs, lambda: self._build_hotels(prefs))
         _normalize_and_rank_hotels(hotels, prefs)
         self._enrich_place_clusters(pois, hotels)
+        # 知识库检索（TRAVELMIND_KNOWLEDGE 开启时）：只给已入选候选补背景事实，
+        # 不引入地点、坐标、票价或库存；关闭时不发工具调用。
+        knowledge = self._record(
+            trace,
+            "KnowledgeAgent 知识库检索",
+            prefs,
+            lambda: self._build_knowledge(prefs, pois),
+        )
         # 片区聚类后快照候选池，保证契约携带 cluster/selection/source_meta 完整字段。
         candidate_contracts = self._build_candidate_contracts(prefs, pois, hotels, weather)
         local_transport = self._record(trace, "LocalMobilityAgent 目的地内交通", prefs, lambda: self._build_local_transport(prefs, routes, hotels))
@@ -217,7 +226,7 @@ class StructuredTravelPlanner:
             trace,
             "DeepSeekPlanningBrainAgent 智能规划脑",
             prefs,
-            lambda: self._build_deepseek_itinerary_days(prefs, routes, local_transport, hotels, pois, weather, weather_advice),
+            lambda: self._build_deepseek_itinerary_days(prefs, routes, local_transport, hotels, pois, weather, weather_advice, knowledge),
         )
         llm_status = str(llm_plan.get("llm_status") or "fallback") if isinstance(llm_plan, dict) else "fallback"
         if isinstance(llm_plan, dict) and llm_status == "used" and llm_plan.get("itinerary_days"):
@@ -310,6 +319,7 @@ class StructuredTravelPlanner:
             "map": map_data,
             "pois": pois,
             "candidate_contracts": candidate_contracts,
+            "knowledge": knowledge,
             "budget": budget,
             "budget_adjustments": budget_adjustments,
             "itinerary_days": itinerary_days,
@@ -521,6 +531,16 @@ class StructuredTravelPlanner:
             return {"total": None, "breakdown": {}, "sources": {}, "basis": [error], "text": error}
         if "每日" in name:
             return []
+        if "知识" in name or "Knowledge" in name:
+            return {
+                "provider_status": "unavailable",
+                "city": "",
+                "city_guide": None,
+                "matched": {},
+                "matched_count": 0,
+                "candidate_count": 0,
+                "note": f"{name} 降级：{error}",
+            }
         return f"生成失败：{error}"
 
     def _normalize_preferences(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -754,6 +774,9 @@ class StructuredTravelPlanner:
     _poi_key = staticmethod(_poi_key)
     _take_unused_poi = staticmethod(_take_unused_poi)
     _take_unused_poi_for_cluster = staticmethod(_take_unused_poi_for_cluster)
+
+    # knowledge_service
+    _build_knowledge = _build_knowledge
 
     # local_transport_service
     _amap_local_segment = staticmethod(_amap_local_segment)
