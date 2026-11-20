@@ -6,6 +6,43 @@
 
 ---
 
+## [2026-11-20 21:48] 新增旅游攻略混合检索 RAG 与行程全面可视化自由编辑
+
+### 意图
+- 结合 `main` 分支已有 9 城策展 JSON 语料，补齐跨城市攻略知识库检索与用户自定义攻略管理能力（RAG 混合检索增强生成），让行程规划能够吸收片区动线、预约规则、避坑提醒和雨天室内替代经验，同时保持高德 POI 事实边界。
+- 彻底升级前端行程编辑自由度，解除编辑模式下的固定时段与受限操作，支持拖拽重排、跨天移动、增删天数、内联自定义编辑、高德实时搜地点插入/替换、自定义节点、切换酒店/主交通以及撤销重做。
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `sync/knowledge/rag_service.py` | 新增 | 混合检索 RAG 引擎（统一索引 9 城策展 JSON + 内置 Markdown + 用户自定义攻略；默认 BM25 + 元数据加权，配置 Embedding API 时启用 BM25 + 向量 RRF 重排与 `.cache/embeddings.json` 持久化缓存） |
+| `knowledge_base/builtin/sanya.md` | 新增 | 三亚互补内置攻略（湾区动线、海鲜/免税防坑、雨天替代） |
+| `knowledge_base/builtin/chongqing.md` | 新增 | 重庆互补内置攻略（山城片区动线、夜景错峰、美食与防坑） |
+| `knowledge_base/builtin/general_travel_tips.md` | 新增 | 跨城通用出行策略（预约规律、雨天/高温应对、带娃与长辈节奏控制） |
+| `sync/multi_agent/deepseek_brain.py` | 修改 | 规划脑 prompt 引导结合 `rag_knowledge` 安排动线与避坑，同时严守高德 `candidate_id` 事实边界 |
+| `sync/multi_agent/itinerary_builder.py` | 修改 | 规划脑 payload 透传可选 `rag_context` |
+| `sync/multi_agent/quality_reviewer.py` | 修改 | 行程体检接口透传可选 `rag_context` |
+| `sync/multi_agent/markdown_writer.py` | 修改 | Markdown 导出新增「攻略知识参考（RAG）」小节 |
+| `sync/multi_agent/structured_planner.py` | 修改 | `run()` 接入 `RAGKnowledgeAgent 攻略混合检索` 并输出 `rag_references`/`rag_meta`；新增 `search_poi_by_keyword()` 供编辑选点弹窗调用 |
+| `sync/fastmcp_server_streamhttp.py` | 修改 | 新增 `search_poi_keyword` 与 `search_travel_knowledge` MCP 工具（从 `sync.knowledge.rag_service` 导入，避免拖入 langchain）；完整保留 `kb_retrieve` |
+| `sync/travel_web_app.py` | 修改 | 新增 `/api/rag/docs`（GET/POST/DELETE）、`/api/rag/search`、`/api/poi/search` 接口 |
+| `web/index.html`、`web/app.js`、`web/styles.css` | 修改 | 基于 `travelmind-v2` 界面升级全面自由编辑（Undo/Redo、HTML5 拖拽排序与跨天拖放、增删天数、内联自定义编辑、候选池/高德搜地点/自由自定义节点弹窗、切换酒店与跨城交通）及 RAG 攻略参考与知识库管理弹窗；静态资源版本升至 `v=phase52` |
+| `.env.example`、`.gitignore` | 修改 | 补充可选 `RAG_EMBEDDING_*` 环境变量并忽略 `/knowledge_base/.cache/` |
+| `tests/test_rag_and_editing.py` | 新增 | 离线单元测试：统一语料索引、城市隔离、BM25+向量 RRF 混合检索与磁盘缓存、自定义文档增删与内置保护、Markdown RAG 导出、前端自由编辑与 E2E 选择器契约 |
+
+### 验证
+- [x] `py_compile` 通过（全部修改及仓库 Python 文件）
+- [x] `node --check web/app.js` 通过
+- [x] 新增单元测试 `tests/test_rag_and_editing.py` 8/8 通过
+- [x] 既有 `sync.knowledge.retrieve` 与 `tests/test_phase5_persistence.py` 10/10 通过（本机默认 Python 未安装 fastmcp/fastapi/langchain，全量回归与 E2E 需在项目依赖虚拟环境中执行）
+- [x] 已基于 `origin/main` 提交并快进推送至 `origin/Ay` 分支
+
+### 备注
+- `rag_service.py` 放置在 `sync/knowledge/` 包下，与 `sync/multi_agent/` 解耦，确保 MCP Server 进程零 langchain 依赖。
+- 严格保留 `TRAVELMIND_KNOWLEDGE` 默认 `off` 灰度行为、`place_source` 合法集合以及 Playwright E2E 关键选择器，不增加离线评测的 toolbox/LLM 调用次数。
+
+---
+
 ## [2026-11-01 15:30] 新增知识库检索工具 kb_retrieve
 
 ### 意图

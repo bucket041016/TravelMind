@@ -28,6 +28,43 @@ const exportButton = document.querySelector("#exportButton");
 const exportMenu = document.querySelector("#exportMenu");
 const navLinks = document.querySelectorAll("[data-scroll-target]");
 const modifyPanel = document.querySelector(".modify-panel");
+const openRagModalButton = document.querySelector("#openRagModalButton");
+const ragModal = document.querySelector("#ragModal");
+const ragStatusLine = document.querySelector("#ragStatusLine");
+const ragDocList = document.querySelector("#ragDocList");
+const ragUploadForm = document.querySelector("#ragUploadForm");
+const ragDocTitle = document.querySelector("#ragDocTitle");
+const ragDocCity = document.querySelector("#ragDocCity");
+const ragDocTags = document.querySelector("#ragDocTags");
+const ragDocFile = document.querySelector("#ragDocFile");
+const ragDocContent = document.querySelector("#ragDocContent");
+const ragUploadMessage = document.querySelector("#ragUploadMessage");
+const ragUploadSubmit = document.querySelector("#ragUploadSubmit");
+const ragSearchForm = document.querySelector("#ragSearchForm");
+const ragSearchCity = document.querySelector("#ragSearchCity");
+const ragSearchQuery = document.querySelector("#ragSearchQuery");
+const ragSearchResults = document.querySelector("#ragSearchResults");
+const placePickerModal = document.querySelector("#placePickerModal");
+const placePickerTitle = document.querySelector("#placePickerTitle");
+const placePickerSub = document.querySelector("#placePickerSub");
+const pickerTargetDay = document.querySelector("#pickerTargetDay");
+const pickerTargetCategory = document.querySelector("#pickerTargetCategory");
+const pickerTargetTime = document.querySelector("#pickerTargetTime");
+const poiSearchForm = document.querySelector("#poiSearchForm");
+const poiSearchCity = document.querySelector("#poiSearchCity");
+const poiSearchKeyword = document.querySelector("#poiSearchKeyword");
+const poiSearchSubmit = document.querySelector("#poiSearchSubmit");
+const poiSearchStatus = document.querySelector("#poiSearchStatus");
+const poiSearchResults = document.querySelector("#poiSearchResults");
+const pickerExistingPool = document.querySelector("#pickerExistingPool");
+const customItemForm = document.querySelector("#customItemForm");
+const customItemTitle = document.querySelector("#customItemTitle");
+const customItemLocation = document.querySelector("#customItemLocation");
+const customItemAddress = document.querySelector("#customItemAddress");
+const customItemCost = document.querySelector("#customItemCost");
+const customItemTransport = document.querySelector("#customItemTransport");
+const customItemDuration = document.querySelector("#customItemDuration");
+const customItemDetail = document.querySelector("#customItemDetail");
 
 const planningStages = [
   "理解旅行偏好",
@@ -41,6 +78,7 @@ const planningStages = [
 ];
 
 const timeSlots = ["上午", "中午", "下午", "晚上", "夜间"];
+const maxUndoHistory = 40;
 const sessionStorageKey = "travelmind:currentSession:v1";
 const navCollapsedStorageKey = "travelmind:navCollapsed:v1";
 const learnedHintsStorageKey = "travelmind:learnedHints:v1";
@@ -64,6 +102,12 @@ let activeTabName = "result";
 let currentTrace = [];
 let followupMessages = [];
 let sessionId = createSessionId();
+let undoStack = [];
+let redoStack = [];
+let editingCardKey = null;
+let pickerContext = { mode: "add", dayIndex: 0, itemIndex: null };
+let latestPoiSearchItems = [];
+let dragSource = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -84,11 +128,50 @@ function timeSlotForIndex(index) {
   return timeSlots[index] || `第 ${index + 1} 段`;
 }
 
-function normalizeDayItemTimes(day) {
+function isDefaultTimeSlot(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  return timeSlots.includes(text) || /^第\s*\d+\s*段$/.test(text);
+}
+
+function normalizeDayItemTimes(day, options = {}) {
   if (!day || !Array.isArray(day.items)) return;
+  const force = Boolean(options.force);
   day.items.forEach((item, index) => {
-    item.time = timeSlotForIndex(index);
+    if (force || (!item.custom_time && isDefaultTimeSlot(item.time))) {
+      item.time = timeSlotForIndex(index);
+      if (force) item.custom_time = false;
+    }
   });
+}
+
+function pushUndoSnapshot() {
+  if (!currentPlanData) return;
+  undoStack.push(clonePlan(currentPlanData));
+  if (undoStack.length > maxUndoHistory) undoStack.shift();
+  redoStack = [];
+}
+
+function clearEditHistory() {
+  undoStack = [];
+  redoStack = [];
+  editingCardKey = null;
+}
+
+function undoPlanEdit() {
+  if (!undoStack.length || !currentPlanData) return;
+  redoStack.push(clonePlan(currentPlanData));
+  currentPlanData = undoStack.pop();
+  editingCardKey = null;
+  finalizeManualPlanMutation({ skipRebuild: true });
+}
+
+function redoPlanEdit() {
+  if (!redoStack.length || !currentPlanData) return;
+  undoStack.push(clonePlan(currentPlanData));
+  currentPlanData = redoStack.pop();
+  editingCardKey = null;
+  finalizeManualPlanMutation({ skipRebuild: true });
 }
 
 function renderTable(lines) {
@@ -708,17 +791,32 @@ function renderInfoList(items) {
 
 function renderNamedItems(items, limit = 6, options = {}) {
   if (!items || !items.length) return `<div class="empty-state">暂无候选</div>`;
+  const selectedHotelId = options.kind === "hotel" ? currentPlanData?.hotels?.selected_id : "";
   return items
     .slice(0, limit)
-    .map((item) => {
+    .map((item, index) => {
       const compactHotel = options.kind === "hotel" && options.compact;
       const note =
         options.kind === "hotel" && !compactHotel
           ? [hotelMatchReason(item, options), item.cost_note].filter(Boolean).join(" ")
           : item.cost_note;
+      const isSelectedHotel =
+        options.kind === "hotel" &&
+        ((selectedHotelId && item.id === selectedHotelId) || (!selectedHotelId && index === 0));
+      let actionHtml = "";
+      if (options.kind === "hotel") {
+        actionHtml = isSelectedHotel
+          ? `<span class="mini-badge selected">当前入住</span>`
+          : `<button type="button" class="mini-action-btn" data-select-hotel-index="${index}">设为入住</button>`;
+      } else if (options.group) {
+        actionHtml = `<button type="button" class="mini-action-btn" data-add-candidate-group="${escapeHtml(options.group)}" data-add-candidate-index="${index}">+ 加入行程</button>`;
+      }
       return `
-        <div class="mini-item${compactHotel ? " mini-item--hotel" : ""}">
-          <strong>${escapeHtml(item.name || "未命名")}</strong>
+        <div class="mini-item${compactHotel ? " mini-item--hotel" : ""}${isSelectedHotel ? " selected-card" : ""}">
+          <div class="mini-item-head">
+            <strong>${escapeHtml(item.name || "未命名")}</strong>
+            ${actionHtml}
+          </div>
           <span>${escapeHtml(item.address || (compactHotel ? "地址待核实" : item.description || "暂无补充信息"))}</span>
           <small>${compactHotel ? renderHotelMeta(item, options) : renderPoiMeta(item, options)}</small>
           ${!compactHotel && note ? `<em>${escapeHtml(note)}</em>` : ""}
@@ -861,6 +959,9 @@ function formatPriceDisplay(item = {}, options = {}) {
   const rangeText = formatPriceRange(item.price_range, options);
   const unit = options.kind === "hotel" ? "/晚" : "";
 
+  if (source === "manual_edit") {
+    return `${formatMoney(cost ?? 0)}${unit} · 手动编辑预算`;
+  }
   if (source === "amap_cost" && cost) {
     return `${formatMoney(cost)}${unit} · ${options.kind === "hotel" ? "高德酒店参考消费" : "高德参考消费"}`;
   }
@@ -956,10 +1057,18 @@ function renderTransportCards(intercity, prefs = {}, renderOptions = {}) {
   return routeOptions
     .map((option) => {
       const normalized = normalizeTransportOption({ ...option }, prefs);
-      const selected = option.mode === intercity.recommended ? " selected" : "";
+      const isSelected = option.mode === intercity.recommended;
+      const selected = isSelected ? " selected" : "";
       return `
         <article class="route-card${selected}${compact ? " route-card--compact" : ""}">
-          <div class="card-kicker">${selected ? "推荐主交通" : "备选方案"}</div>
+          <div class="route-card-head">
+            <div class="card-kicker">${isSelected ? "推荐主交通" : "备选方案"}</div>
+            ${
+              isSelected
+                ? `<span class="mini-badge selected">已选用</span>`
+                : `<button type="button" class="mini-action-btn" data-select-intercity-mode="${escapeHtml(option.mode)}">选为主交通</button>`
+            }
+          </div>
           <h4>${escapeHtml(option.title || modeLabel(option.mode))}</h4>
           <div class="route-endpoints">
             <strong>${escapeHtml(normalized.origin_detail)}</strong>
@@ -1234,6 +1343,8 @@ function sourceLabel(source) {
     category_rule: "类型规则估算",
     unknown_price: "价格待核实",
     rule_fallback: "规则估算",
+    manual_edit: "手动编辑预算",
+    knowledge_base: "攻略知识库",
   }[source] || "待校准";
 }
 
@@ -1245,6 +1356,7 @@ function placeSourceLabel(source, isRealPlace) {
     planning_note: "说明项",
     transport_note: "交通说明",
     llm_suggestion: "待确认建议",
+    user_custom: "自定义节点",
   }[source] || (isRealPlace ? "真实地点" : "说明项");
 }
 
@@ -1357,19 +1469,35 @@ function renderMap(mapData) {
 
 function renderItineraryDays(days) {
   if (!days || !days.length) return `<div class="empty-state">暂无每日行程</div>`;
+  const totalDays = days.length;
   return days
     .map(
       (day, dayIndex) => `
-        <details class="day-card story-day" open>
+        <details class="day-card story-day" data-day-card="${dayIndex}" open>
           <summary>
             <span>第 ${escapeHtml(day.day)} 天</span>
-            <strong>${escapeHtml(day.theme || "")}</strong>
+            ${
+              editMode
+                ? `<div class="day-theme-editor">
+                    <input type="text" class="day-theme-input" data-day-theme-index="${dayIndex}" value="${escapeHtml(day.theme || "")}" placeholder="输入当天主题" aria-label="第 ${escapeHtml(day.day)} 天主题" />
+                    <button type="button" class="mini-action-btn" data-day-action="add-item" data-day-index="${dayIndex}">+ 添加节点</button>
+                    <button type="button" class="mini-action-btn danger" data-day-action="delete-day" data-day-index="${dayIndex}" ${totalDays <= 1 ? "disabled" : ""}>删除该天</button>
+                  </div>`
+                : `<strong>${escapeHtml(day.theme || "")}</strong>`
+            }
             <em>${escapeHtml(day.date || "")}</em>
           </summary>
-          <div class="timeline">
-            ${(day.items || [])
-              .map((item, itemIndex) => renderTimelineItem(item, dayIndex, itemIndex, day.items.length))
-              .join("")}
+          <div class="timeline" data-day-dropzone="${dayIndex}">
+            ${
+              (day.items || []).length
+                ? (day.items || [])
+                    .map((item, itemIndex) => renderTimelineItem(item, dayIndex, itemIndex, day.items.length, totalDays))
+                    .join("")
+                : `<div class="empty-day-dropzone" data-day-dropzone="${dayIndex}">
+                    <span>这一天暂时还没有安排，可将其他天的活动拖到这里，或点击“+ 添加节点”。</span>
+                    ${editMode ? `<button type="button" class="mini-action-btn" data-day-action="add-item" data-day-index="${dayIndex}">+ 添加节点</button>` : ""}
+                  </div>`
+            }
           </div>
         </details>
       `,
@@ -1481,15 +1609,88 @@ function timelineItemTransport(item = {}) {
   return raw;
 }
 
-function renderTimelineItem(item, dayIndex, itemIndex, count) {
+function renderInlineCardEditor(item, dayIndex, itemIndex) {
+  const category = item.category || "activity";
+  const costValue = Number.isFinite(Number(item.cost_estimate)) ? Number(item.cost_estimate) : 0;
+  return `
+    <form class="inline-item-editor" data-inline-edit-form="${dayIndex}:${itemIndex}">
+      <div class="inline-editor-grid">
+        <label>
+          <span>时间段 / 具体时间</span>
+          <input type="text" name="time" value="${escapeHtml(item.time || timeSlotForIndex(itemIndex))}" placeholder="如 上午 或 09:30-11:30" />
+        </label>
+        <label>
+          <span>类别</span>
+          <select name="category">
+            <option value="activity" ${category === "activity" ? "selected" : ""}>景点 / 体验</option>
+            <option value="food" ${category === "food" ? "selected" : ""}>美食 / 餐厅</option>
+            <option value="hotel" ${category === "hotel" ? "selected" : ""}>住宿 / 休整</option>
+            <option value="transfer" ${category === "transfer" ? "selected" : ""}>交通 / 接驳</option>
+            <option value="note" ${category === "note" ? "selected" : ""}>自由备注</option>
+          </select>
+        </label>
+        <label class="span-2">
+          <span>活动标题</span>
+          <input type="text" name="title" value="${escapeHtml(item.title || "")}" required />
+        </label>
+        <label>
+          <span>地点名称</span>
+          <input type="text" name="location" value="${escapeHtml(item.location || "")}" />
+        </label>
+        <label>
+          <span>地址</span>
+          <input type="text" name="address" value="${escapeHtml(item.address || "")}" />
+        </label>
+        <label>
+          <span>交通方式</span>
+          <input type="text" name="transport" value="${escapeHtml(timelineItemTransport(item))}" />
+        </label>
+        <label>
+          <span>预计耗时</span>
+          <input type="text" name="duration" value="${escapeHtml(item.duration || "")}" />
+        </label>
+        <label>
+          <span>单人预算（元）</span>
+          <input type="number" name="cost_estimate" min="0" step="5" value="${escapeHtml(costValue)}" />
+        </label>
+        <label class="span-2">
+          <span>详细说明 / 个人备注</span>
+          <textarea name="detail" rows="2">${escapeHtml(item.detail || "")}</textarea>
+        </label>
+      </div>
+      <div class="inline-editor-actions">
+        <button type="button" class="ghost-button" data-action="cancel-inline-edit">取消</button>
+        <button type="submit" class="primary-button">保存修改</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderTimelineItem(item, dayIndex, itemIndex, count, totalDays = 1) {
   const hasImage = item.photo_url;
-  const displayTime = timeSlotForIndex(itemIndex);
+  const displayTime = item.time || timeSlotForIndex(itemIndex);
   const displayLocation = timelineItemLocation(item);
   const displayTransport = timelineItemTransport(item);
   const displayDetail = timelineItemDetail(item);
+  const cardKey = `${dayIndex}:${itemIndex}`;
+  const isInlineEditing = editMode && editingCardKey === cardKey;
+  const moveDayOptions =
+    totalDays > 1
+      ? `<select class="move-day-select" data-move-day-select="1" aria-label="移动到其他天">
+          <option value="">移到第...天</option>
+          ${Array.from({ length: totalDays }, (_, idx) =>
+            idx === dayIndex
+              ? ""
+              : `<option value="${idx}">移到第 ${idx + 1} 天</option>`,
+          ).join("")}
+        </select>`
+      : "";
   return `
-    <article class="activity-card feed-card" data-day-index="${dayIndex}" data-item-index="${itemIndex}">
-      <div class="activity-time">${escapeHtml(displayTime)}</div>
+    <article class="activity-card feed-card${editMode ? " editable" : ""}${isInlineEditing ? " inline-editing" : ""}" data-day-index="${dayIndex}" data-item-index="${itemIndex}" ${editMode && !isInlineEditing ? 'draggable="true"' : ""}>
+      <div class="activity-time-col">
+        ${editMode ? `<div class="drag-handle" title="按住拖拽排序或跨天移动">⋮⋮</div>` : ""}
+        <div class="activity-time">${escapeHtml(displayTime)}</div>
+      </div>
       <div class="activity-media ${hasImage ? "" : "empty"}">
         ${
           hasImage
@@ -1506,13 +1707,17 @@ function renderTimelineItem(item, dayIndex, itemIndex, count) {
           ${
             editMode
               ? `<div class="activity-actions">
+                  <button type="button" data-action="edit-inline">${isInlineEditing ? "收起" : "编辑"}</button>
+                  <button type="button" data-action="replace">替换</button>
+                  ${moveDayOptions}
                   <button type="button" data-action="move-up" ${itemIndex === 0 ? "disabled" : ""}>上移</button>
                   <button type="button" data-action="move-down" ${itemIndex === count - 1 ? "disabled" : ""}>下移</button>
-                  <button type="button" data-action="delete">删除</button>
+                  <button type="button" class="danger" data-action="delete">删除</button>
                 </div>`
               : ""
           }
         </div>
+        ${isInlineEditing ? renderInlineCardEditor(item, dayIndex, itemIndex) : ""}
         ${renderArrivalSegment(item.arrival_transport_segment)}
         ${renderKnowledgeDetail(item)}
         <p class="activity-detail ${item.knowledge_detail ? "secondary" : ""}">${escapeHtml(displayDetail)}</p>
@@ -1533,7 +1738,8 @@ function renderTimelineItem(item, dayIndex, itemIndex, count) {
 function renderSpotlightCards(items, kind = "activity", limit = 2, options = {}) {
   const list = (items || []).slice(0, limit);
   if (!list.length) return `<div class="empty-state">暂无推荐</div>`;
-  const kindLabel = kind === "food" ? "Food recomm." : "Activity";
+  const kindLabel = kind === "food" ? "美食推荐" : "精选景点";
+  const group = kind === "food" ? "foods" : "attractions";
   return list
     .map((item, index) => {
       const hasImage = item.photo_url;
@@ -1541,7 +1747,10 @@ function renderSpotlightCards(items, kind = "activity", limit = 2, options = {})
       const swatch = (title || kindLabel).slice(0, 2);
       return `
         <article class="spotlight-card ${escapeHtml(kind)}">
-          <div class="spotlight-kicker">${escapeHtml(kindLabel)}</div>
+          <div class="spotlight-top-row">
+            <div class="spotlight-kicker">${escapeHtml(kindLabel)}</div>
+            <button type="button" class="mini-action-btn" data-add-candidate-group="${escapeHtml(group)}" data-add-candidate-index="${index}">+ 加入行程</button>
+          </div>
           <div class="spotlight-media ${hasImage ? "" : "empty"}">
             ${
               hasImage
@@ -1560,6 +1769,64 @@ function renderSpotlightCards(items, kind = "activity", limit = 2, options = {})
       `;
     })
     .join("");
+}
+
+function ragModeLabel(mode) {
+  return {
+    hybrid_bm25_vector: "BM25 + 向量混合检索 (RRF)",
+    bm25_metadata: "BM25 + 元数据加权检索",
+    fallback: "知识库降级",
+  }[mode] || "知识库检索";
+}
+
+function renderRagReferences(refs = [], meta = {}) {
+  const list = Array.isArray(refs) ? refs : [];
+  const header = `
+    <div class="rag-meta-bar">
+      <span>${escapeHtml(ragModeLabel(meta?.retrieval_mode))}${list.length ? ` · 命中 ${list.length} 条` : ""}</span>
+      <button type="button" class="mini-action-btn" data-open-rag-modal="1">管理/上传攻略</button>
+    </div>
+  `;
+  if (!list.length) {
+    return `${header}<div class="empty-state">当前行程未命中特定攻略片段，可点击上方按钮上传自定义攻略笔记。</div>`;
+  }
+  const cards = list
+    .map(
+      (item) => `
+        <article class="rag-ref-card">
+          <div class="rag-ref-head">
+            <strong>${escapeHtml(item.title || "攻略片段")}${item.section ? ` · ${escapeHtml(item.section)}` : ""}</strong>
+            <span class="rag-origin-tag ${item.origin_type === "custom" ? "custom" : "builtin"}">${item.origin_type === "custom" ? "自定义" : "内置"}</span>
+          </div>
+          <p>${escapeHtml(item.content || "")}</p>
+          <div class="rag-ref-foot">
+            <span>城市：${escapeHtml(item.city || "通用")}</span>
+            <span>匹配：${escapeHtml((item.match_reasons || []).join(" · ") || "关键词匹配")}</span>
+            <span>相关度 ${escapeHtml(item.score ?? "-")}</span>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+  return `${header}<div class="rag-ref-list">${cards}</div>`;
+}
+
+function renderEditToolbar() {
+  if (!editMode) return "";
+  return `
+    <div class="edit-toolbar">
+      <div class="edit-toolbar-group">
+        <button type="button" class="toolbar-btn primary" data-toolbar-action="add-item">+ 搜索/添加地点</button>
+        <button type="button" class="toolbar-btn" data-toolbar-action="add-day">+ 新增一天</button>
+        <button type="button" class="toolbar-btn" data-toolbar-action="reset-times">重排默认时段</button>
+      </div>
+      <div class="edit-toolbar-group">
+        <button type="button" class="toolbar-btn" data-toolbar-action="undo" ${undoStack.length ? "" : "disabled"}>撤销 (${undoStack.length})</button>
+        <button type="button" class="toolbar-btn" data-toolbar-action="redo" ${redoStack.length ? "" : "disabled"}>重做 (${redoStack.length})</button>
+      </div>
+      <div class="edit-toolbar-tip">支持按住左侧 ⋮⋮ 拖拽排序或跨天移动；点“编辑”可直接修改时间、标题、备注与单价预算；不会自动重跑 Agent。</div>
+    </div>
+  `;
 }
 
 function renderSupportPanel({ id = "", className = "", title, summary = "", body = "", open = false }) {
@@ -1613,7 +1880,11 @@ function renderWeatherSignal(weather = {}, advice = {}) {
 }
 
 function renderFeaturedHotel(hotels = {}, hotelArea = "") {
-  const featured = Array.isArray(hotels.candidates) ? hotels.candidates[0] : null;
+  const candidates = Array.isArray(hotels.candidates) ? hotels.candidates : [];
+  const featured =
+    (hotels.selected_id && candidates.find((item) => item.id === hotels.selected_id)) ||
+    candidates[0] ||
+    null;
   if (!featured) {
     return `
       <div class="hotel-featured">
@@ -1652,15 +1923,15 @@ function renderPlanResult(data, options = {}) {
       ${foodSpotlights}
     </div>
     <details class="candidate-drawer">
-      <summary>查看全部候选</summary>
+      <summary>查看全部候选（可直接一键加入行程）</summary>
       <div class="poi-columns">
         <div>
           <h4>景点/活动</h4>
-          <div class="mini-list">${renderNamedItems(pois.attractions, 8)}</div>
+          <div class="mini-list">${renderNamedItems(pois.attractions, 8, { group: "attractions" })}</div>
         </div>
         <div>
           <h4>地方美食</h4>
-          <div class="mini-list">${renderNamedItems(pois.foods, 8)}</div>
+          <div class="mini-list">${renderNamedItems(pois.foods, 8, { group: "foods" })}</div>
         </div>
       </div>
     </details>
@@ -1757,9 +2028,13 @@ function renderPlanResult(data, options = {}) {
               <div class="section-kicker">DAY BY DAY</div>
               <div class="section-title">每日行程</div>
             </div>
-            <span class="section-caption">按地点顺序安排移动与停留</span>
+            ${
+              !editMode
+                ? `<button type="button" class="mini-action-btn" data-quick-enter-edit="1">自由编辑行程</button>`
+                : `<span class="section-caption">编辑中 · 拖拽或点击卡片调整</span>`
+            }
           </div>
-          ${editMode ? `<div class="status-line">编辑模式：可上移、下移或删除活动；不会自动重新调用 Agent。</div>` : ""}
+          ${renderEditToolbar()}
           ${renderItineraryDays(data.itinerary_days)}
         </section>
 
@@ -1768,8 +2043,12 @@ function renderPlanResult(data, options = {}) {
             <div class="section-heading-row compact-heading"><div><div class="section-kicker">LOCAL PICKS</div><div class="section-title">精选推荐</div></div><span class="section-caption">景点与餐饮</span></div>
             ${poiSupport}
           </section>
+          <section id="ragSection" class="result-card rag-card">
+            <div class="section-heading-row compact-heading"><div><div class="section-kicker">RAG KNOWLEDGE</div><div class="section-title">攻略知识参考</div></div><span class="section-caption">动线与避坑</span></div>
+            ${renderRagReferences(data.rag_references, data.rag_meta)}
+          </section>
         </aside>
-      </section>
+      </div>
     </div>
   `;
   if (!options.preserveScroll) scrollWorkspaceToTop();
@@ -2112,6 +2391,7 @@ function rebuildClientLocalTransport(data) {
 }
 
 function combinedClientSource(items) {
+  if (items.some((item) => item.cost_source === "manual_edit")) return "manual_edit";
   if (items.some((item) => item.cost_source === "amap_cost")) return "amap_cost";
   if (items.some((item) => item.cost_source === "amap_route")) return "amap_route";
   if (items.some((item) => item.cost_source === "ai_price_range")) return "ai_price_range";
@@ -2126,12 +2406,68 @@ function combinedClientSegmentSource(segments) {
   return "unknown_price";
 }
 
-function recalculateBudgetAfterEdit(data) {
+function estimateClientIntercityCost(data, mode) {
+  const travelers = Math.max(1, Number(data.preferences?.travelers || 1));
+  const distance = Number(data.preferences?.estimatedDistanceKm || 180);
+  const option = (data.intercity_transport?.options || []).find((item) => item.mode === mode);
+  const text = `${option?.price || ""} ${option?.summary || ""}`;
+  if (mode === "driving") {
+    const tollMatch = text.match(/过路费约\s*([0-9.]+)\s*元/);
+    if (tollMatch) return { total: Math.round(Number(tollMatch[1]) * 2), source: "amap_route" };
+    return { total: Math.round(distance * 1.2), source: "rule_fallback" };
+  }
+  if (mode === "rail") {
+    const rangeMatch = text.match(/([0-9.]+)\s*[~\-～]\s*([0-9.]+)\s*元/);
+    if (rangeMatch) {
+      const avg = (Number(rangeMatch[1]) + Number(rangeMatch[2])) / 2;
+      return { total: Math.round(avg * 2 * travelers), source: "rule_fallback" };
+    }
+    return { total: Math.round(distance * 0.6 * 2 * travelers), source: "rule_fallback" };
+  }
+  if (mode === "flight") {
+    const oneWay = Math.max(450, Math.min(1800, distance * 0.45));
+    return { total: Math.round(oneWay * 2 * travelers), source: "rule_fallback" };
+  }
+  return { total: Number(data.budget?.breakdown?.intercity_transport || 160 * travelers), source: "rule_fallback" };
+}
+
+function getSelectedHotelCandidate(data) {
+  const candidates = data?.hotels?.candidates || [];
+  if (!candidates.length) return null;
+  const selectedId = data?.hotels?.selected_id;
+  if (selectedId) {
+    const found = candidates.find((item) => item.id === selectedId);
+    if (found) return found;
+  }
+  return candidates[0];
+}
+
+function recalculateBudgetAfterEdit(data, options = {}) {
   const budget = data.budget || {};
   const breakdown = { ...(budget.breakdown || {}) };
   const sources = { ...(budget.sources || {}) };
-  const travelers = Number(data.preferences?.travelers || 1);
+  const travelers = Math.max(1, Number(data.preferences?.travelers || 1));
   const days = data.itinerary_days || [];
+  const dayCount = Math.max(1, days.length);
+  const nights = Math.max(dayCount - 1, 1);
+  const rooms = Math.max(1, Math.floor((travelers + 1) / 2));
+
+  if (options.recalcHotel || data.hotels?.selected_id) {
+    const selectedHotel = getSelectedHotelCandidate(data);
+    const hotelUnit =
+      positiveAmount(selectedHotel?.cost) ||
+      positiveAmount(selectedHotel?.cost_estimate) ||
+      hotelReferencePrice(data.preferences?.hotelLevel);
+    breakdown.hotel = Math.round(hotelUnit * nights * rooms);
+    sources.hotel = selectedHotel?.cost_source || "category_rule";
+  }
+
+  if (options.recalcIntercity) {
+    const intercity = estimateClientIntercityCost(data, data.intercity_transport?.recommended);
+    breakdown.intercity_transport = intercity.total;
+    sources.intercity_transport = intercity.source;
+  }
+
   const allItems = days.flatMap((day) => day.items || []);
   const foodItems = allItems.filter((item) => item.category === "food");
   const activityItems = allItems.filter((item) => item.category === "activity");
@@ -2185,10 +2521,241 @@ function recalculateBudgetAfterEdit(data) {
       : "已按当前手动调整后的每日活动重新估算活动项。",
     basis: [
       ...(budget.basis || []).filter((item) => !String(item).includes("手动调整")),
-      `手动调整后，餐饮按 ${foodItems.length} 个餐饮项目、门票/体验按 ${activityItems.length} 个活动项目、市内交通按约 ${movementCount} 次移动重新估算；活动缺少可靠门票价时按无门票/免费项目默认 0 元，仍需核实。`,
+      `手动调整后，按 ${dayCount} 天（${nights} 晚住宿）、${foodItems.length} 个餐饮项目、${activityItems.length} 个活动项目、约 ${movementCount} 次市内移动重新估算；活动缺少可靠门票价时按无门票/免费项目默认 0 元，仍需核实。`,
     ],
   };
   budgetAdjusted = true;
+}
+
+function renumberItineraryDays(data) {
+  const days = data?.itinerary_days || [];
+  const startDateRaw = String(data?.preferences?.startDate || "").trim();
+  const baseDate = /^\d{4}-\d{2}-\d{2}$/.test(startDateRaw) ? new Date(`${startDateRaw}T00:00:00`) : null;
+  days.forEach((day, index) => {
+    day.day = index + 1;
+    if (baseDate && !Number.isNaN(baseDate.getTime())) {
+      const nextDate = new Date(baseDate.getTime());
+      nextDate.setDate(baseDate.getDate() + index);
+      day.date = toDateInputValue(nextDate);
+    }
+  });
+  if (data?.preferences) {
+    data.preferences.days = days.length;
+  }
+}
+
+function finalizeManualPlanMutation(options = {}) {
+  if (!currentPlanData) return;
+  if (!options.skipRebuild) {
+    renumberItineraryDays(currentPlanData);
+    (currentPlanData.itinerary_days || []).forEach((day) => {
+      normalizeDayItemTimes(day, { force: Boolean(options.forceTimes) });
+    });
+    rebuildClientMap(currentPlanData);
+    rebuildClientLocalTransport(currentPlanData);
+    recalculateBudgetAfterEdit(currentPlanData, {
+      recalcHotel: Boolean(options.recalcHotel),
+      recalcIntercity: Boolean(options.recalcIntercity),
+    });
+  }
+  currentMarkdown = buildMarkdownFromPlan(currentPlanData);
+  renderMarkdownResult(currentMarkdown);
+  renderPlanResult(currentPlanData, { preserveScroll: true });
+  saveSessionSnapshot();
+}
+
+function buildItemFromPoiCandidate(poi, dayNumber, slotText, categoryOverride = "") {
+  const category =
+    categoryOverride ||
+    (poi._candidate_category === "food" || /餐|美食|菜|火锅|早茶|面|小吃/.test(String(poi.type || ""))
+      ? "food"
+      : "activity");
+  const isFood = category === "food";
+  const cost = positiveAmount(poi.cost) || positiveAmount(poi.cost_estimate) || (isFood ? 80 : 0);
+  const costSource =
+    poi.cost_source ||
+    (positiveAmount(poi.cost)
+      ? "amap_cost"
+      : isFood
+        ? "category_rule"
+        : "free_or_no_ticket_default");
+  const isCustomSlot = Boolean(slotText && !isDefaultTimeSlot(slotText));
+  return {
+    id: `manual-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    poi_id: poi.id || "",
+    time: slotText || "下午",
+    custom_time: isCustomSlot,
+    title: `${poi.name || "自选地点"}${isFood ? "用餐" : "游览"}`,
+    location: poi.name || "",
+    address: poi.address || "",
+    transport: "打车/公共交通/步行",
+    duration: isFood ? "1-1.5 小时" : "1.5-2.5 小时",
+    detail: poi.description || "用户自由添加到行程的高德真实 POI。",
+    category,
+    rating: poi.rating || null,
+    cost: positiveAmount(poi.cost),
+    cost_estimate: cost,
+    cost_source: costSource,
+    price_range: poi.price_range || (cost ? { min: cost, max: cost, currency: "CNY", unit: "person" } : { min: 0, max: 0, currency: "CNY", unit: "person" }),
+    price_confidence: poi.price_confidence || (costSource === "amap_cost" ? "high" : "low"),
+    cost_note: poi.cost_note || (isFood ? "按餐厅参考估算，以现场为准。" : "未获取门票价，默认 0 元，出行前请核实。"),
+    type: poi.type || "",
+    location_point: normalizeClientPoint(poi.location || poi.location_point),
+    location_source: normalizeClientPoint(poi.location || poi.location_point) ? "amap_poi" : "missing",
+    map_label: "",
+    map_included: false,
+    photo_url: poi.photo_url || "",
+    is_real_place: Boolean(poi.name && (poi.location || poi.location_point || poi.address)),
+    place_source: poi.place_source || "amap_poi",
+    validation_note: "用户手动加入的高德候选地点。",
+    knowledge_detail: poi.knowledge_detail || "",
+  };
+}
+
+function addNewItineraryDay() {
+  if (!currentPlanData) return;
+  pushUndoSnapshot();
+  if (!Array.isArray(currentPlanData.itinerary_days)) currentPlanData.itinerary_days = [];
+  const nextNumber = currentPlanData.itinerary_days.length + 1;
+  currentPlanData.itinerary_days.push({
+    day: nextNumber,
+    date: "",
+    theme: `${currentPlanData.preferences?.destinationCity || "目的地"}自由探索日`,
+    weather_note: "",
+    items: [],
+  });
+  editingCardKey = null;
+  finalizeManualPlanMutation({ recalcHotel: true });
+}
+
+function deleteItineraryDay(dayIndex) {
+  if (!currentPlanData) return;
+  const days = currentPlanData.itinerary_days || [];
+  if (days.length <= 1 || dayIndex < 0 || dayIndex >= days.length) return;
+  pushUndoSnapshot();
+  days.splice(dayIndex, 1);
+  editingCardKey = null;
+  finalizeManualPlanMutation({ recalcHotel: true });
+}
+
+function moveItemBetweenDays(fromDayIndex, fromItemIndex, toDayIndex, toItemIndex = null) {
+  if (!currentPlanData) return;
+  const days = currentPlanData.itinerary_days || [];
+  const sourceDay = days[fromDayIndex];
+  const targetDay = days[toDayIndex];
+  if (!sourceDay || !targetDay || !Array.isArray(sourceDay.items) || !Array.isArray(targetDay.items)) return;
+  if (fromItemIndex < 0 || fromItemIndex >= sourceDay.items.length) return;
+  if (fromDayIndex === toDayIndex && (toItemIndex === fromItemIndex || toItemIndex === null)) return;
+
+  pushUndoSnapshot();
+  const [moved] = sourceDay.items.splice(fromItemIndex, 1);
+  let insertAt = toItemIndex === null ? targetDay.items.length : Number(toItemIndex);
+  if (fromDayIndex === toDayIndex && fromItemIndex < insertAt) {
+    insertAt = Math.max(0, insertAt - 1);
+  }
+  insertAt = Math.max(0, Math.min(insertAt, targetDay.items.length));
+  targetDay.items.splice(insertAt, 0, moved);
+  rememberLearnedHints(["不去太远景点"]);
+  editingCardKey = null;
+  finalizeManualPlanMutation();
+}
+
+function saveInlineItemEdit(form) {
+  if (!currentPlanData) return;
+  const [dayIdxStr, itemIdxStr] = String(form.dataset.inlineEditForm || "").split(":");
+  const dayIndex = Number(dayIdxStr);
+  const itemIndex = Number(itemIdxStr);
+  const item = currentPlanData.itinerary_days?.[dayIndex]?.items?.[itemIndex];
+  if (!item) return;
+
+  const formData = new FormData(form);
+  const nextTitle = String(formData.get("title") || "").trim();
+  if (!nextTitle) return;
+
+  pushUndoSnapshot();
+  const nextTime = String(formData.get("time") || "").trim() || timeSlotForIndex(itemIndex);
+  const nextCategory = String(formData.get("category") || item.category || "activity");
+  const nextLocation = String(formData.get("location") || "").trim();
+  const nextAddress = String(formData.get("address") || "").trim();
+  const nextTransport = String(formData.get("transport") || "").trim();
+  const nextDuration = String(formData.get("duration") || "").trim();
+  const nextDetail = String(formData.get("detail") || "").trim();
+  const rawCost = Number(formData.get("cost_estimate"));
+  const nextCost = Number.isFinite(rawCost) && rawCost >= 0 ? Math.round(rawCost) : 0;
+
+  item.time = nextTime;
+  item.custom_time = !isDefaultTimeSlot(nextTime);
+  item.category = nextCategory;
+  item.title = nextTitle;
+  item.location = nextLocation;
+  item.address = nextAddress;
+  item.transport = nextTransport;
+  item.duration = nextDuration;
+  item.detail = nextDetail;
+
+  if (nextCost !== Number(item.cost_estimate || 0)) {
+    item.cost_estimate = nextCost;
+    item.cost = nextCost;
+    item.cost_source = "manual_edit";
+    item.price_range = { min: nextCost, max: nextCost, currency: "CNY", unit: "person" };
+    item.cost_note = "用户手动编辑的预算单价。";
+  }
+
+  editingCardKey = null;
+  finalizeManualPlanMutation();
+}
+
+function selectHotelCandidate(index) {
+  if (!currentPlanData) return;
+  const candidates = currentPlanData.hotels?.candidates || [];
+  const chosen = candidates[index];
+  if (!chosen) return;
+  pushUndoSnapshot();
+  currentPlanData.hotels.selected_id = chosen.id || `hotel-${index}`;
+  const nearby = hotelNearbyLabel(chosen);
+  currentPlanData.hotels.area_recommendation = `已选入住：${chosen.name}（${nearby}），便于行程衔接与返程。`;
+
+  const firstDayItems = currentPlanData.itinerary_days?.[0]?.items || [];
+  const hotelItem = firstDayItems.find((item) => item.place_source === "hotel_poi" || item.category === "hotel");
+  if (hotelItem) {
+    hotelItem.title = `抵达后前往住宿：${chosen.name}`;
+    hotelItem.location = chosen.name;
+    hotelItem.address = chosen.address || "";
+    hotelItem.poi_id = chosen.id || "";
+    hotelItem.location_point = normalizeClientPoint(chosen.location) || hotelItem.location_point;
+    hotelItem.validation_note = "已按用户选定的入住酒店同步更新。";
+  }
+  finalizeManualPlanMutation({ recalcHotel: true });
+}
+
+function selectIntercityMode(mode) {
+  if (!currentPlanData || !mode) return;
+  if (currentPlanData.intercity_transport?.recommended === mode) return;
+  pushUndoSnapshot();
+  if (!currentPlanData.intercity_transport) currentPlanData.intercity_transport = { recommended: mode, options: [] };
+  currentPlanData.intercity_transport.recommended = mode;
+  finalizeManualPlanMutation({ recalcIntercity: true });
+}
+
+function addCandidateFromRightPanel(group, index) {
+  if (!currentPlanData) return;
+  const pool = currentPlanData.pois?.[group] || [];
+  const candidate = pool[index];
+  if (!candidate) return;
+  const days = currentPlanData.itinerary_days || [];
+  if (!days.length) return;
+
+  const targetDayIndex = days.length - 1;
+  const targetDay = days[targetDayIndex];
+  pushUndoSnapshot();
+  const category = group === "foods" ? "food" : "activity";
+  const slot = timeSlotForIndex((targetDay.items || []).length);
+  const newItem = buildItemFromPoiCandidate(candidate, targetDay.day, slot, category);
+  targetDay.items = targetDay.items || [];
+  targetDay.items.push(newItem);
+  editMode = true;
+  if (editPlanButton) editPlanButton.textContent = "完成编辑";
+  finalizeManualPlanMutation();
 }
 
 function applyActivityEdit(card, action) {
@@ -2198,25 +2765,39 @@ function applyActivityEdit(card, action) {
   const day = currentPlanData.itinerary_days?.[dayIndex];
   if (!day || !Array.isArray(day.items)) return;
 
+  if (action === "edit-inline") {
+    const key = `${dayIndex}:${itemIndex}`;
+    editingCardKey = editingCardKey === key ? null : key;
+    renderPlanResult(currentPlanData, { preserveScroll: true });
+    return;
+  }
+  if (action === "cancel-inline-edit") {
+    editingCardKey = null;
+    renderPlanResult(currentPlanData, { preserveScroll: true });
+    return;
+  }
+  if (action === "replace") {
+    openPlacePickerModal({ mode: "replace", dayIndex, itemIndex });
+    return;
+  }
+
+  pushUndoSnapshot();
   if (action === "delete") {
     day.items.splice(itemIndex, 1);
     rememberLearnedHints(["别太赶"]);
+    editingCardKey = null;
   } else if (action === "move-up" && itemIndex > 0) {
     [day.items[itemIndex - 1], day.items[itemIndex]] = [day.items[itemIndex], day.items[itemIndex - 1]];
     rememberLearnedHints(["不去太远景点"]);
+    editingCardKey = null;
   } else if (action === "move-down" && itemIndex < day.items.length - 1) {
     [day.items[itemIndex + 1], day.items[itemIndex]] = [day.items[itemIndex], day.items[itemIndex + 1]];
     rememberLearnedHints(["不去太远景点"]);
+    editingCardKey = null;
   }
 
   normalizeDayItemTimes(day);
-  rebuildClientMap(currentPlanData);
-  rebuildClientLocalTransport(currentPlanData);
-  recalculateBudgetAfterEdit(currentPlanData);
-  currentMarkdown = buildMarkdownFromPlan(currentPlanData);
-  renderMarkdownResult(currentMarkdown);
-  renderPlanResult(currentPlanData, { preserveScroll: true });
-  saveSessionSnapshot();
+  finalizeManualPlanMutation();
 }
 
 function buildMarkdownFromPlan(data) {
@@ -2241,6 +2822,13 @@ function buildMarkdownFromPlan(data) {
       }
     });
   });
+  if (Array.isArray(data.rag_references) && data.rag_references.length) {
+    lines.push("", "### 攻略知识参考（RAG）");
+    data.rag_references.slice(0, 5).forEach((ref) => {
+      const heading = ref.section ? `${ref.title} · ${ref.section}` : ref.title || "攻略片段";
+      lines.push(`- ${heading}：${String(ref.content || "").replace(/\s+/g, " ").slice(0, 140)}`);
+    });
+  }
   if (data.quality_review) {
     const review = data.quality_review;
     lines.push("", "### 智能体检");
@@ -2444,6 +3032,7 @@ const BACKEND_STEP_TO_STAGE = {
   IntercityTransportAgent: 1,
   POIAgent: 3,
   KnowledgeAgent: 3,
+  RAGKnowledgeAgent: 4,
   HotelAgent: 4,
   LocalMobilityAgent: 5,
   DeepSeekPlanningBrainAgent: 5,
@@ -2641,6 +3230,7 @@ async function sendPlan(payload) {
     currentMarkdown = data.markdown || buildMarkdownFromPlan(currentPlanData);
     budgetAdjusted = false;
     editMode = false;
+    clearEditHistory();
     if (editPlanButton) editPlanButton.textContent = "编辑行程";
     renderPlanResult(currentPlanData);
     renderMarkdownResult(currentMarkdown);
@@ -2758,6 +3348,7 @@ resetButton.addEventListener("click", async () => {
   activeTabName = "result";
   editMode = false;
   budgetAdjusted = false;
+  clearEditHistory();
   clearSessionSnapshot();
   renderEmptyResult();
   setActiveTab("result", { skipSave: true });
@@ -2779,14 +3370,246 @@ if (backHomeButton) {
   });
 }
 
+/* ===========================
+ * RAG 知识库弹窗 & 地点选择器弹窗
+ * =========================== */
+
+function setRagModalTab(tabName) {
+  document.querySelectorAll("[data-rag-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.ragTab === tabName);
+  });
+  const panels = {
+    docs: document.querySelector("#ragTabDocs"),
+    upload: document.querySelector("#ragTabUpload"),
+    search: document.querySelector("#ragTabSearch"),
+  };
+  Object.entries(panels).forEach(([key, panel]) => {
+    if (panel) panel.hidden = key !== tabName;
+  });
+}
+
+async function refreshRagDocs() {
+  if (!ragDocList) return;
+  try {
+    const response = await fetch("/api/rag/docs");
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    const modeText = ragModeLabel(data.retrieval_mode);
+    if (ragStatusLine) {
+      ragStatusLine.textContent = `当前模式：${modeText} · 共 ${data.total_docs || 0} 篇攻略 / ${data.total_chunks || 0} 个语义分块`;
+    }
+    const docs = Array.isArray(data.documents) ? data.documents : [];
+    if (!docs.length) {
+      ragDocList.innerHTML = `<div class="empty-state">知识库暂无攻略，切换到“上传/新建攻略”即可添加。</div>`;
+      return;
+    }
+    ragDocList.innerHTML = docs
+      .map(
+        (doc) => `
+          <article class="rag-doc-item">
+            <div class="rag-doc-head">
+              <div>
+                <strong>${escapeHtml(doc.title)}</strong>
+                <span class="rag-origin-tag ${doc.origin_type === "custom" ? "custom" : "builtin"}">${doc.origin_type === "custom" ? "自定义" : "内置"}</span>
+                <span class="rag-city-tag">${escapeHtml(doc.city || "通用")}</span>
+              </div>
+              ${
+                doc.origin_type === "custom"
+                  ? `<button type="button" class="mini-action-btn danger" data-delete-rag-doc="${escapeHtml(doc.doc_id)}">删除</button>`
+                  : `<span class="rag-meta-muted">${escapeHtml(doc.chunk_count)} 块</span>`
+              }
+            </div>
+            <p>${escapeHtml(doc.preview || "")}</p>
+            <div class="rag-ref-foot">
+              <span>分类：${escapeHtml(doc.category || "攻略")}</span>
+              <span>标签：${escapeHtml((doc.tags || []).join(" / ") || "无")}</span>
+              <span>更新：${escapeHtml(doc.updated_at || "-")}</span>
+            </div>
+          </article>
+        `,
+      )
+      .join("");
+  } catch (error) {
+    if (ragStatusLine) ragStatusLine.textContent = "加载知识库失败";
+    ragDocList.innerHTML = `<div class="empty-state">加载失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function openRagModal(defaultTab = "docs") {
+  if (!ragModal) return;
+  ragModal.hidden = false;
+  setRagModalTab(defaultTab);
+  const currentCity = currentPlanData?.preferences?.destinationCity || document.querySelector("#destinationCity")?.value || "";
+  if (ragSearchCity && !ragSearchCity.value && currentCity) ragSearchCity.value = currentCity;
+  if (ragDocCity && ragDocCity.value === "通用" && currentCity) ragDocCity.value = currentCity;
+  if (ragUploadMessage) ragUploadMessage.textContent = "";
+  refreshRagDocs();
+}
+
+function closeModalById(modalId) {
+  const modal = document.getElementById(modalId);
+  if (modal) modal.hidden = true;
+}
+
+function setPickerTab(tabName) {
+  document.querySelectorAll("[data-picker-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.pickerTab === tabName);
+  });
+  const amapPanel = document.querySelector("#pickerTabAmap");
+  const customPanel = document.querySelector("#pickerTabCustom");
+  if (amapPanel) amapPanel.hidden = tabName !== "amap";
+  if (customPanel) customPanel.hidden = tabName !== "custom";
+}
+
+function renderPickerExistingPool() {
+  if (!pickerExistingPool || !currentPlanData) return;
+  const usedIds = new Set(
+    (currentPlanData.itinerary_days || [])
+      .flatMap((day) => day.items || [])
+      .map((item) => item.poi_id)
+      .filter(Boolean),
+  );
+  const attractions = (currentPlanData.pois?.attractions || []).map((item, idx) => ({
+    ...item,
+    _poolGroup: "attractions",
+    _poolIdx: idx,
+    _poolCat: "activity",
+  }));
+  const foods = (currentPlanData.pois?.foods || []).map((item, idx) => ({
+    ...item,
+    _poolGroup: "foods",
+    _poolIdx: idx,
+    _poolCat: "food",
+  }));
+  const all = [...attractions, ...foods];
+  if (!all.length) {
+    pickerExistingPool.innerHTML = `<div class="empty-state">当前规划暂无内置候选池，请在上方搜索高德地点或切换到“自由自定义节点”。</div>`;
+    return;
+  }
+  const btnText = pickerContext.mode === "replace" ? "替换为此地点" : "+ 加入行程";
+  pickerExistingPool.innerHTML = all
+    .slice(0, 16)
+    .map(
+      (item) => `
+        <div class="picker-poi-row">
+          <div>
+            <strong>${escapeHtml(item.name)}${usedIds.has(item.id) ? ` <em class="used-flag">已在行程中</em>` : ""}</strong>
+            <span>${escapeHtml(item.address || item.description || "")}</span>
+            <small>${escapeHtml(item._poolCat === "food" ? "美食" : "景点")} · ${renderPoiMeta(item)}</small>
+          </div>
+          <button type="button" class="mini-action-btn" data-pick-pool-group="${escapeHtml(item._poolGroup)}" data-pick-pool-index="${item._poolIdx}">${btnText}</button>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderPoiSearchResults(items) {
+  latestPoiSearchItems = Array.isArray(items) ? items : [];
+  if (!poiSearchResults) return;
+  if (!latestPoiSearchItems.length) {
+    poiSearchResults.innerHTML = `<div class="empty-state">没有检索到匹配的高德地点，可换个关键词或切换到“自由自定义节点”。</div>`;
+    return;
+  }
+  const btnText = pickerContext.mode === "replace" ? "替换为此地点" : "+ 加入行程";
+  poiSearchResults.innerHTML = latestPoiSearchItems
+    .map(
+      (item, index) => `
+        <div class="picker-poi-row">
+          <div>
+            <strong>${escapeHtml(item.name || "未命名")}</strong>
+            <span>${escapeHtml(item.address || item.description || "")}</span>
+            <small>${renderPoiMeta(item)}</small>
+          </div>
+          <button type="button" class="mini-action-btn" data-pick-search-index="${index}">${btnText}</button>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function openPlacePickerModal(options = {}) {
+  if (!placePickerModal || !currentPlanData) return;
+  const days = currentPlanData.itinerary_days || [];
+  pickerContext = {
+    mode: options.mode === "replace" ? "replace" : "add",
+    dayIndex: Math.max(0, Math.min(Number(options.dayIndex || 0), Math.max(days.length - 1, 0))),
+    itemIndex: options.itemIndex ?? null,
+  };
+  if (placePickerTitle) {
+    placePickerTitle.textContent =
+      pickerContext.mode === "replace" ? "替换当前行程节点" : "添加新地点或自定义活动";
+  }
+  if (placePickerSub) {
+    placePickerSub.textContent =
+      pickerContext.mode === "replace"
+        ? "从高德实时搜索、候选池或自定义内容中选一项，原地替换当前节点。"
+        : "支持实时搜索高德 POI 景点/餐厅并附带坐标，也支持完全自由填写自定义日程。";
+  }
+  if (pickerTargetDay) {
+    pickerTargetDay.innerHTML = days
+      .map((day, idx) => `<option value="${idx}" ${idx === pickerContext.dayIndex ? "selected" : ""}>第 ${day.day} 天（${escapeHtml(day.theme || "")}）</option>`)
+      .join("");
+    pickerTargetDay.disabled = pickerContext.mode === "replace";
+  }
+
+  const existingItem =
+    pickerContext.mode === "replace" && pickerContext.itemIndex !== null
+      ? days[pickerContext.dayIndex]?.items?.[pickerContext.itemIndex]
+      : null;
+
+  if (pickerTargetCategory) pickerTargetCategory.value = existingItem?.category || "activity";
+  if (pickerTargetTime) pickerTargetTime.value = existingItem?.time || "";
+  if (poiSearchCity) poiSearchCity.value = currentPlanData.preferences?.destinationCity || "";
+  if (poiSearchKeyword) poiSearchKeyword.value = "";
+  if (poiSearchStatus) poiSearchStatus.textContent = "";
+  if (poiSearchResults) poiSearchResults.innerHTML = "";
+  if (customItemForm) customItemForm.reset();
+
+  setPickerTab("amap");
+  renderPickerExistingPool();
+  placePickerModal.hidden = false;
+}
+
+function commitPickedItem(newItem) {
+  if (!currentPlanData) return;
+  const targetDayIndex = Number(pickerTargetDay?.value ?? pickerContext.dayIndex ?? 0);
+  const day = currentPlanData.itinerary_days?.[targetDayIndex];
+  if (!day) return;
+  day.items = day.items || [];
+
+  pushUndoSnapshot();
+  if (pickerContext.mode === "replace" && pickerContext.itemIndex !== null && day.items[pickerContext.itemIndex]) {
+    const oldItem = day.items[pickerContext.itemIndex];
+    const customTime = String(pickerTargetTime?.value || "").trim();
+    newItem.time = customTime || oldItem.time || timeSlotForIndex(pickerContext.itemIndex);
+    newItem.custom_time = !isDefaultTimeSlot(newItem.time);
+    day.items.splice(pickerContext.itemIndex, 1, newItem);
+  } else {
+    const customTime = String(pickerTargetTime?.value || "").trim();
+    newItem.time = customTime || timeSlotForIndex(day.items.length);
+    newItem.custom_time = Boolean(customTime && !isDefaultTimeSlot(customTime));
+    day.items.push(newItem);
+  }
+
+  editingCardKey = null;
+  closeModalById("placePickerModal");
+  finalizeManualPlanMutation();
+}
+
 if (editPlanButton) {
   editPlanButton.addEventListener("click", () => {
     if (!currentPlanData) return;
     editMode = !editMode;
+    if (!editMode) editingCardKey = null;
     editPlanButton.textContent = editMode ? "完成编辑" : "编辑行程";
     renderPlanResult(currentPlanData, { preserveScroll: true });
     saveSessionSnapshot();
   });
+}
+
+if (openRagModalButton) {
+  openRagModalButton.addEventListener("click", () => openRagModal("docs"));
 }
 
 if (exportButton) {
@@ -2806,16 +3629,434 @@ if (exportMenu) {
 }
 
 planResult.addEventListener("click", (event) => {
+  if (event.target.closest(".day-theme-input")) {
+    event.stopPropagation();
+    return;
+  }
+
+  const quickEdit = event.target.closest("[data-quick-enter-edit]");
+  if (quickEdit && currentPlanData) {
+    editMode = true;
+    if (editPlanButton) editPlanButton.textContent = "完成编辑";
+    renderPlanResult(currentPlanData, { preserveScroll: true });
+    saveSessionSnapshot();
+    return;
+  }
+
+  const openRagBtn = event.target.closest("[data-open-rag-modal]");
+  if (openRagBtn) {
+    openRagModal("upload");
+    return;
+  }
+
   const sessionButton = event.target.closest("[data-session-action]");
   if (sessionButton?.dataset.sessionAction === "restore-plan") {
     renderCurrentPlanFromState();
     return;
   }
+
+  const selectHotelBtn = event.target.closest("[data-select-hotel-index]");
+  if (selectHotelBtn) {
+    selectHotelCandidate(Number(selectHotelBtn.dataset.selectHotelIndex));
+    return;
+  }
+
+  const selectIntercityBtn = event.target.closest("[data-select-intercity-mode]");
+  if (selectIntercityBtn) {
+    selectIntercityMode(selectIntercityBtn.dataset.selectIntercityMode);
+    return;
+  }
+
+  const addCandBtn = event.target.closest("[data-add-candidate-group]");
+  if (addCandBtn) {
+    addCandidateFromRightPanel(
+      addCandBtn.dataset.addCandidateGroup,
+      Number(addCandBtn.dataset.addCandidateIndex),
+    );
+    return;
+  }
+
+  const toolbarBtn = event.target.closest("[data-toolbar-action]");
+  if (toolbarBtn && editMode) {
+    const action = toolbarBtn.dataset.toolbarAction;
+    if (action === "add-day") addNewItineraryDay();
+    else if (action === "add-item") openPlacePickerModal({ mode: "add", dayIndex: 0 });
+    else if (action === "undo") undoPlanEdit();
+    else if (action === "redo") redoPlanEdit();
+    else if (action === "reset-times") {
+      pushUndoSnapshot();
+      finalizeManualPlanMutation({ forceTimes: true });
+    }
+    return;
+  }
+
+  const dayActionBtn = event.target.closest("[data-day-action]");
+  if (dayActionBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    const dayIndex = Number(dayActionBtn.dataset.dayIndex);
+    if (dayActionBtn.dataset.dayAction === "add-item") {
+      openPlacePickerModal({ mode: "add", dayIndex });
+    } else if (dayActionBtn.dataset.dayAction === "delete-day") {
+      deleteItineraryDay(dayIndex);
+    }
+    return;
+  }
+
   const actionButton = event.target.closest("[data-action]");
   if (!actionButton || !editMode) return;
   const card = actionButton.closest(".activity-card");
   if (!card) return;
   applyActivityEdit(card, actionButton.dataset.action);
+});
+
+planResult.addEventListener("change", (event) => {
+  const moveSelect = event.target.closest("[data-move-day-select]");
+  if (moveSelect && editMode) {
+    const targetDayIndex = Number(moveSelect.value);
+    const card = moveSelect.closest(".activity-card");
+    if (card && Number.isInteger(targetDayIndex)) {
+      moveItemBetweenDays(Number(card.dataset.dayIndex), Number(card.dataset.itemIndex), targetDayIndex, null);
+    }
+    return;
+  }
+
+  const themeInput = event.target.closest("[data-day-theme-index]");
+  if (themeInput && currentPlanData) {
+    const dayIndex = Number(themeInput.dataset.dayThemeIndex);
+    const day = currentPlanData.itinerary_days?.[dayIndex];
+    if (day && day.theme !== themeInput.value.trim()) {
+      pushUndoSnapshot();
+      day.theme = themeInput.value.trim() || `第 ${day.day} 天行程`;
+      currentMarkdown = buildMarkdownFromPlan(currentPlanData);
+      renderMarkdownResult(currentMarkdown);
+      saveSessionSnapshot();
+    }
+  }
+});
+
+planResult.addEventListener("submit", (event) => {
+  const inlineForm = event.target.closest("[data-inline-edit-form]");
+  if (!inlineForm) return;
+  event.preventDefault();
+  saveInlineItemEdit(inlineForm);
+});
+
+planResult.addEventListener("dragstart", (event) => {
+  if (!editMode) return;
+  const card = event.target.closest(".activity-card[draggable='true']");
+  if (!card) return;
+  dragSource = {
+    dayIndex: Number(card.dataset.dayIndex),
+    itemIndex: Number(card.dataset.itemIndex),
+  };
+  card.classList.add("dragging");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", JSON.stringify(dragSource));
+  }
+});
+
+planResult.addEventListener("dragend", () => {
+  dragSource = null;
+  planResult.querySelectorAll(".dragging, .drag-over").forEach((el) => {
+    el.classList.remove("dragging", "drag-over");
+  });
+});
+
+planResult.addEventListener("dragover", (event) => {
+  if (!editMode || !dragSource) return;
+  const targetCard = event.target.closest(".activity-card");
+  const targetDropzone = event.target.closest("[data-day-dropzone]");
+  if (!targetCard && !targetDropzone) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  planResult.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+  if (targetCard) targetCard.classList.add("drag-over");
+  else if (targetDropzone) targetDropzone.classList.add("drag-over");
+});
+
+planResult.addEventListener("drop", (event) => {
+  if (!editMode || !dragSource) return;
+  const targetCard = event.target.closest(".activity-card");
+  const targetDropzone = event.target.closest("[data-day-dropzone]");
+  if (!targetCard && !targetDropzone) return;
+  event.preventDefault();
+  const source = dragSource;
+  dragSource = null;
+  planResult.querySelectorAll(".dragging, .drag-over").forEach((el) => {
+    el.classList.remove("dragging", "drag-over");
+  });
+
+  if (targetCard) {
+    moveItemBetweenDays(
+      source.dayIndex,
+      source.itemIndex,
+      Number(targetCard.dataset.dayIndex),
+      Number(targetCard.dataset.itemIndex),
+    );
+  } else if (targetDropzone) {
+    moveItemBetweenDays(
+      source.dayIndex,
+      source.itemIndex,
+      Number(targetDropzone.dataset.dayDropzone),
+      null,
+    );
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const closeBtn = event.target.closest("[data-close-modal]");
+  if (closeBtn) {
+    closeModalById(closeBtn.dataset.closeModal);
+    return;
+  }
+  if (event.target.classList?.contains("modal-backdrop")) {
+    event.target.hidden = true;
+    return;
+  }
+  const ragTabBtn = event.target.closest("[data-rag-tab]");
+  if (ragTabBtn) {
+    setRagModalTab(ragTabBtn.dataset.ragTab);
+    return;
+  }
+  const pickerTabBtn = event.target.closest("[data-picker-tab]");
+  if (pickerTabBtn) {
+    setPickerTab(pickerTabBtn.dataset.pickerTab);
+    return;
+  }
+  const delRagBtn = event.target.closest("[data-delete-rag-doc]");
+  if (delRagBtn) {
+    const docId = delRagBtn.dataset.deleteRagDoc;
+    fetch(`/api/rag/docs/${encodeURIComponent(docId)}`, { method: "DELETE" })
+      .then((res) => {
+        if (!res.ok) throw new Error("删除失败");
+        return refreshRagDocs();
+      })
+      .catch((err) => {
+        if (ragStatusLine) ragStatusLine.textContent = `删除失败：${err.message}`;
+      });
+    return;
+  }
+  const pickSearchBtn = event.target.closest("[data-pick-search-index]");
+  if (pickSearchBtn) {
+    const poi = latestPoiSearchItems[Number(pickSearchBtn.dataset.pickSearchIndex)];
+    if (poi) {
+      const targetDayIndex = Number(pickerTargetDay?.value ?? pickerContext.dayIndex ?? 0);
+      const dayNum = currentPlanData?.itinerary_days?.[targetDayIndex]?.day || targetDayIndex + 1;
+      const item = buildItemFromPoiCandidate(
+        poi,
+        dayNum,
+        String(pickerTargetTime?.value || "").trim(),
+        pickerTargetCategory?.value || "",
+      );
+      commitPickedItem(item);
+    }
+    return;
+  }
+  const pickPoolBtn = event.target.closest("[data-pick-pool-group]");
+  if (pickPoolBtn && currentPlanData) {
+    const group = pickPoolBtn.dataset.pickPoolGroup;
+    const idx = Number(pickPoolBtn.dataset.pickPoolIndex);
+    const poi = currentPlanData.pois?.[group]?.[idx];
+    if (poi) {
+      const targetDayIndex = Number(pickerTargetDay?.value ?? pickerContext.dayIndex ?? 0);
+      const dayNum = currentPlanData.itinerary_days?.[targetDayIndex]?.day || targetDayIndex + 1;
+      const item = buildItemFromPoiCandidate(
+        poi,
+        dayNum,
+        String(pickerTargetTime?.value || "").trim(),
+        group === "foods" ? "food" : pickerTargetCategory?.value || "activity",
+      );
+      commitPickedItem(item);
+    }
+  }
+});
+
+if (ragDocFile) {
+  ragDocFile.addEventListener("change", async () => {
+    const file = ragDocFile.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      if (ragDocContent) ragDocContent.value = text;
+      if (ragDocTitle && !ragDocTitle.value.trim()) {
+        ragDocTitle.value = file.name.replace(/\.(md|markdown|txt)$/i, "");
+      }
+      if (ragUploadMessage) ragUploadMessage.textContent = `已读入文件：${file.name}（${text.length} 字）`;
+    } catch (error) {
+      if (ragUploadMessage) ragUploadMessage.textContent = `读取文件失败：${error.message}`;
+    }
+  });
+}
+
+if (ragUploadForm) {
+  ragUploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (ragUploadSubmit) ragUploadSubmit.disabled = true;
+    if (ragUploadMessage) ragUploadMessage.textContent = "正在入库并更新索引...";
+    try {
+      const response = await fetch("/api/rag/docs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: ragDocTitle.value.trim(),
+          city: ragDocCity.value.trim() || "通用",
+          tags: ragDocTags.value.trim(),
+          content: ragDocContent.value.trim(),
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      ragUploadForm.reset();
+      if (ragDocCity) ragDocCity.value = currentPlanData?.preferences?.destinationCity || "通用";
+      if (ragUploadMessage) ragUploadMessage.textContent = "攻略已成功入库！后续规划与检索将自动生效。";
+      await refreshRagDocs();
+      setRagModalTab("docs");
+    } catch (error) {
+      if (ragUploadMessage) ragUploadMessage.textContent = `保存失败：${error.message}`;
+    } finally {
+      if (ragUploadSubmit) ragUploadSubmit.disabled = false;
+    }
+  });
+}
+
+if (ragSearchForm) {
+  ragSearchForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = ragSearchQuery.value.trim();
+    if (!query) return;
+    ragSearchResults.innerHTML = `<div class="empty-state">检索中...</div>`;
+    try {
+      const response = await fetch("/api/rag/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          city: ragSearchCity.value.trim(),
+          top_k: 5,
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      const hits = Array.isArray(data.hits) ? data.hits : [];
+      if (!hits.length) {
+        ragSearchResults.innerHTML = `<div class="empty-state">未召回相关片段，可尝试放宽城市过滤或上传自定义攻略。</div>`;
+        return;
+      }
+      ragSearchResults.innerHTML = hits
+        .map(
+          (hit) => `
+            <article class="rag-ref-card">
+              <div class="rag-ref-head">
+                <strong>${escapeHtml(hit.title)}${hit.section ? ` · ${escapeHtml(hit.section)}` : ""}</strong>
+                <span class="rag-origin-tag ${hit.origin_type === "custom" ? "custom" : "builtin"}">${hit.origin_type === "custom" ? "自定义" : "内置"}</span>
+              </div>
+              <p>${escapeHtml(hit.content)}</p>
+              <div class="rag-ref-foot">
+                <span>城市：${escapeHtml(hit.city || "通用")}</span>
+                <span>匹配：${escapeHtml((hit.match_reasons || []).join(" · "))}</span>
+                <span>模式：${escapeHtml(ragModeLabel(hit.retrieval_mode))} · 分值 ${escapeHtml(hit.score)}</span>
+              </div>
+            </article>
+          `,
+        )
+        .join("");
+    } catch (error) {
+      ragSearchResults.innerHTML = `<div class="empty-state">检索失败：${escapeHtml(error.message)}</div>`;
+    }
+  });
+}
+
+if (poiSearchForm) {
+  poiSearchForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const keyword = poiSearchKeyword.value.trim();
+    const city = poiSearchCity.value.trim() || currentPlanData?.preferences?.destinationCity || "深圳";
+    if (!keyword) return;
+    if (poiSearchSubmit) poiSearchSubmit.disabled = true;
+    if (poiSearchStatus) poiSearchStatus.textContent = `正在高德地图中搜索「${city} · ${keyword}」...`;
+    try {
+      const response = await fetch("/api/poi/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ city, keyword, limit: 8 }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (poiSearchStatus) {
+        poiSearchStatus.textContent = items.length
+          ? `找到 ${items.length} 个真实高德 POI（来源：${data.source || "amap"}），点击即可加入行程。`
+          : "未找到高德 POI，可更换关键词或切到“自由自定义节点”。";
+      }
+      renderPoiSearchResults(items);
+    } catch (error) {
+      if (poiSearchStatus) poiSearchStatus.textContent = `搜索失败：${error.message}`;
+      renderPoiSearchResults([]);
+    } finally {
+      if (poiSearchSubmit) poiSearchSubmit.disabled = false;
+    }
+  });
+}
+
+if (customItemForm) {
+  customItemForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const title = customItemTitle.value.trim();
+    if (!title) return;
+    const category = pickerTargetCategory?.value || "activity";
+    const costVal = Math.max(0, Math.round(Number(customItemCost.value) || 0));
+    const slotText = String(pickerTargetTime?.value || "").trim();
+    const customItem = {
+      id: `custom-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+      poi_id: "",
+      time: slotText || "下午",
+      custom_time: Boolean(slotText && !isDefaultTimeSlot(slotText)),
+      title,
+      location: customItemLocation.value.trim() || title,
+      address: customItemAddress.value.trim(),
+      transport: customItemTransport.value.trim() || "打车/步行",
+      duration: customItemDuration.value.trim() || "1.5 小时",
+      detail: customItemDetail.value.trim() || "用户自由添加的自定义日程节点。",
+      category,
+      rating: null,
+      cost: costVal > 0 ? costVal : null,
+      cost_estimate: costVal,
+      cost_source: costVal > 0 ? "manual_edit" : "free_or_no_ticket_default",
+      price_range: { min: costVal, max: costVal, currency: "CNY", unit: "person" },
+      price_confidence: "medium",
+      cost_note: costVal > 0 ? "用户自定义单人预算。" : "自定义安排，默认 0 元。",
+      type: "自定义日程",
+      location_point: null,
+      location_source: "missing",
+      map_label: "",
+      map_included: false,
+      photo_url: "",
+      is_real_place: false,
+      place_source: "user_custom",
+      validation_note: "用户手动添加的自由安排。",
+    };
+    commitPickedItem(customItem);
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeModalById("ragModal");
+    closeModalById("placePickerModal");
+    return;
+  }
+  const tag = String(event.target?.tagName || "").toLowerCase();
+  if (["input", "textarea", "select"].includes(tag)) return;
+  if (!editMode) return;
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    if (event.shiftKey) redoPlanEdit();
+    else undoPlanEdit();
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+    event.preventDefault();
+    redoPlanEdit();
+  }
 });
 
 tabButtons.forEach((button) => {

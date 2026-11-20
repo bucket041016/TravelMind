@@ -39,8 +39,18 @@ def _review_and_repair_itinerary(
     weather: dict[str, str],
     weather_advice: dict[str, str],
     itinerary_days: list[dict[str, Any]],
+    rag_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    payload, lookup = _planning_brain_payload(prefs, routes, local_transport, hotels, pois, weather, weather_advice)
+    payload, lookup = _planning_brain_payload(
+        prefs,
+        routes,
+        local_transport,
+        hotels,
+        pois,
+        weather,
+        weather_advice,
+        rag_context=rag_context,
+    )
     payload["current_itinerary"] = _compact_itinerary_for_review(itinerary_days)
     payload["quality_targets"] = {
         "pace": (prefs.get("preferenceProfile") or {}).get("pace"),

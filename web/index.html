@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TravelMind</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/static/styles.css?v=phase51" />
+    <link rel="stylesheet" href="/static/styles.css?v=phase52" />
   </head>
   <body class="travelmind-v2">
     <div class="app-shell">
@@ -31,6 +31,7 @@
             <button class="nav-link" type="button" data-scroll-target="daysSection">每日行程</button>
             <button class="nav-link" type="button" data-scroll-target="mapSection">地图视图</button>
             <button class="nav-link" type="button" data-scroll-target="poiSection">推荐候选</button>
+            <button class="nav-link" type="button" data-scroll-target="ragSection">攻略知识</button>
             <button class="nav-link" type="button" data-scroll-target="hotelSection">住宿匹配</button>
             <button class="nav-link" type="button" data-scroll-target="weatherSection">天气建议</button>
             <button class="nav-link" type="button" data-scroll-target="budgetSection">预算评估</button>
@@ -215,6 +216,7 @@
             <h2>把路线、地图和预算放进同一张旅行桌面</h2>
           </div>
           <div class="top-actions">
+            <button id="openRagModalButton" class="ghost-button" type="button">攻略知识库</button>
             <button id="backHomeButton" class="ghost-button" type="button" hidden>返回首页</button>
             <button id="editPlanButton" class="ghost-button" type="button" hidden>编辑行程</button>
             <div class="export-dropdown" hidden>
@@ -280,6 +282,167 @@
       </aside>
     </div>
 
-    <script src="/static/app.js?v=phase51"></script>
+    <div id="ragModal" class="modal-backdrop" hidden>
+      <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="ragModalTitle">
+        <div class="modal-head">
+          <div>
+            <h3 id="ragModalTitle">RAG 旅游攻略知识库</h3>
+            <p id="ragStatusLine" class="modal-sub">正在加载知识库状态...</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal="ragModal" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-tabs">
+          <button class="tab-button active" type="button" data-rag-tab="docs">已入库攻略</button>
+          <button class="tab-button" type="button" data-rag-tab="upload">上传/新建攻略</button>
+          <button class="tab-button" type="button" data-rag-tab="search">检索测试</button>
+        </div>
+        <div class="modal-body">
+          <section id="ragTabDocs" class="rag-tab-panel">
+            <div id="ragDocList" class="rag-doc-list">
+              <div class="empty-state">加载中...</div>
+            </div>
+          </section>
+
+          <section id="ragTabUpload" class="rag-tab-panel" hidden>
+            <form id="ragUploadForm" class="modal-form">
+              <div class="form-grid two">
+                <label>
+                  <span>攻略标题</span>
+                  <input id="ragDocTitle" type="text" placeholder="例如：深圳小众看海与早茶私藏笔记" required />
+                </label>
+                <label>
+                  <span>关联城市（不限填“通用”）</span>
+                  <input id="ragDocCity" type="text" value="通用" placeholder="例如：深圳 / 广州 / 通用" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label>
+                  <span>标签（逗号或顿号分隔）</span>
+                  <input id="ragDocTags" type="text" placeholder="例如：美食,海边,避坑,雨天替代" />
+                </label>
+                <label>
+                  <span>从本地导入 .md / .txt 文件（可选）</span>
+                  <input id="ragDocFile" type="file" accept=".md,.txt,.markdown,text/plain,text/markdown" />
+                </label>
+              </div>
+              <label>
+                <span>攻略正文（支持 Markdown 分级标题，便于精准分块检索）</span>
+                <textarea id="ragDocContent" rows="8" placeholder="可粘贴小红书攻略、个人收藏夹笔记、避坑提醒或预约规则..." required></textarea>
+              </label>
+              <div class="modal-form-actions">
+                <span id="ragUploadMessage" class="status-line"></span>
+                <button id="ragUploadSubmit" class="primary-button" type="submit">保存并更新索引</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="ragTabSearch" class="rag-tab-panel" hidden>
+            <form id="ragSearchForm" class="modal-search-bar">
+              <input id="ragSearchCity" type="text" placeholder="城市过滤（可选）" />
+              <input id="ragSearchQuery" type="text" placeholder="输入问题测试召回，例如：深圳雨天室内玩什么 / 鼓浪屿船票避坑" required />
+              <button class="primary-button" type="submit">测试检索</button>
+            </form>
+            <div id="ragSearchResults" class="rag-hit-list">
+              <div class="empty-state">输入问题即可预览 RAG 混合检索召回的攻略片段。</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="placePickerModal" class="modal-backdrop" hidden>
+      <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="placePickerTitle">
+        <div class="modal-head">
+          <div>
+            <h3 id="placePickerTitle">添加或替换行程节点</h3>
+            <p id="placePickerSub" class="modal-sub">支持从候选池、高德实时搜索加入真实 POI，或自由新建自定义节点。</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal="placePickerModal" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-tabs">
+          <button class="tab-button active" type="button" data-picker-tab="amap">搜索高德地点 / 候选池</button>
+          <button class="tab-button" type="button" data-picker-tab="custom">自由自定义节点</button>
+        </div>
+        <div class="modal-body">
+          <div class="picker-target-bar">
+            <label>
+              <span>目标天数</span>
+              <select id="pickerTargetDay"></select>
+            </label>
+            <label>
+              <span>节点类型</span>
+              <select id="pickerTargetCategory">
+                <option value="activity">景点 / 体验</option>
+                <option value="food">美食 / 餐厅</option>
+                <option value="hotel">住宿 / 休整</option>
+                <option value="transfer">交通 / 接驳</option>
+                <option value="note">自由备注</option>
+              </select>
+            </label>
+            <label>
+              <span>时段/时间（可自定义）</span>
+              <input id="pickerTargetTime" type="text" placeholder="留空自动分配，如 14:30-16:30" />
+            </label>
+          </div>
+
+          <section id="pickerTabAmap" class="picker-tab-panel">
+            <form id="poiSearchForm" class="modal-search-bar">
+              <input id="poiSearchCity" type="text" placeholder="城市" />
+              <input id="poiSearchKeyword" type="text" placeholder="输入景点、餐厅、商场或地标名，例如：大梅沙 / 南山博物馆 / 椰子鸡" required />
+              <button id="poiSearchSubmit" class="primary-button" type="submit">搜索高德 POI</button>
+            </form>
+            <div id="poiSearchStatus" class="status-line"></div>
+            <div id="poiSearchResults" class="picker-result-list"></div>
+            <div class="picker-sub-title">当前行程已有候选（未加入或可复用）</div>
+            <div id="pickerExistingPool" class="picker-result-list"></div>
+          </section>
+
+          <section id="pickerTabCustom" class="picker-tab-panel" hidden>
+            <form id="customItemForm" class="modal-form">
+              <div class="form-grid two">
+                <label>
+                  <span>活动标题</span>
+                  <input id="customItemTitle" type="text" placeholder="例如：打卡海边日落 / 酒店午休 / 逛本地菜市场" required />
+                </label>
+                <label>
+                  <span>地点名称</span>
+                  <input id="customItemLocation" type="text" placeholder="例如：深圳湾日落观景台" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label>
+                  <span>详细地址（可选）</span>
+                  <input id="customItemAddress" type="text" placeholder="可选填写" />
+                </label>
+                <label>
+                  <span>预计人均花费（元）</span>
+                  <input id="customItemCost" type="number" min="0" step="10" value="0" />
+                </label>
+              </div>
+              <div class="form-grid two">
+                <label>
+                  <span>交通方式</span>
+                  <input id="customItemTransport" type="text" value="打车/步行" placeholder="如：地铁 / 打车 / 步行" />
+                </label>
+                <label>
+                  <span>预计耗时</span>
+                  <input id="customItemDuration" type="text" value="1.5 小时" placeholder="如：1-2 小时" />
+                </label>
+              </div>
+              <label>
+                <span>备注与玩法说明</span>
+                <textarea id="customItemDetail" rows="3" placeholder="写下想做的事、预约提醒或同行人要求..."></textarea>
+              </label>
+              <div class="modal-form-actions">
+                <span></span>
+                <button class="primary-button" type="submit">确认加入行程</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/app.js?v=phase52"></script>
   </body>
 </html>

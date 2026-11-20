@@ -113,7 +113,8 @@ class DeepSeekPlanningBrainAgent:
             return self._unavailable("plan")
 
         system_prompt = (
-            "你是 TravelMind 的智能行程规划脑。你必须基于给定的高德候选 POI、酒店、交通、天气和用户偏好规划行程。"
+            "你是 TravelMind 的智能行程规划脑。你必须基于给定的高德候选 POI、酒店、交通、天气、用户偏好以及 rag_knowledge 攻略知识库片段规划行程。"
+            "充分吸收 rag_knowledge 中的片区动线、避坑提示、预约规则、最佳时段、雨天室内替代和本地吃法，并将实用建议融入 detail。"
             "真实地点必须引用候选中的 candidate_id；不要编造真实景点、餐厅、酒店、航班号、票价或库存。"
             "如果需要加入更人性化的体验建议但没有真实 POI，可设置 is_suggestion=true，并写清楚 validation_note。"
             "只输出 JSON，不要 Markdown，不要解释。"

@@ -1644,6 +1644,72 @@ def kb_retrieve(city: str, query: str = "", limit: int = 8) -> dict:
 
 
 @mcp.tool()
+def search_poi_keyword(city: str, keyword: str, limit: int = 8) -> str:
+    """按具体地点或关键词精准搜索目的地高德 POI（供行程自由编辑时插入或替换地点）。
+
+    Args:
+        city (str): 目的地城市，例如 "深圳"。
+        keyword (str): 具体景点、餐厅、商圈或关键词，例如 "南山博物馆"、"大梅沙"、"椰子鸡"。
+        limit (int): 最多返回数量，1 到 15。
+
+    Returns:
+        str: 带评分、人均、地址、坐标的编号 POI 列表。
+    """
+    clean_keyword = str(keyword or "").strip()
+    if not clean_keyword:
+        return "请输入需要检索的地点或关键词。"
+    bounded_limit = max(1, min(int(limit or 8), 15))
+    if not _get_amap_key():
+        return f"{city} 关键词「{clean_keyword}」检索暂不可用（未配置高德 Key）。"
+    try:
+        pois = _amap_search_pois(city, clean_keyword, "", limit=min(bounded_limit + 4, 20))
+        lines = _format_poi_items(pois, limit=bounded_limit, dedupe_nested=False, dedupe_brand=False)
+        if not lines:
+            return f"{city} 未检索到与「{clean_keyword}」相关的高德 POI。"
+        return "\n".join(
+            [
+                f"{city} 关键词「{clean_keyword}」高德 POI 搜索结果",
+                "\n【关键词检索结果】",
+                *lines,
+            ]
+        )
+    except Exception as exc:
+        return f"{city} 关键词「{clean_keyword}」高德 POI 检索失败：{exc}"
+
+
+@mcp.tool()
+def search_travel_knowledge(query: str, city: str = "", top_k: int = 4) -> str:
+    """混合检索 TravelMind 旅游攻略 RAG 知识库（策展城市库 + 内置 Markdown + 用户自定义攻略）。
+
+    Args:
+        query (str): 查询语句，例如 "深圳雨天室内路线"、"鼓浪屿船票预约避坑"。
+        city (str): 可选目的地城市过滤，例如 "深圳"、"厦门"。
+        top_k (int): 返回最相关的攻略片段数量，默认 4。
+
+    Returns:
+        str: 命中的攻略片段摘要与来源。
+    """
+    try:
+        try:
+            from knowledge.rag_service import get_rag_service
+        except ModuleNotFoundError:
+            from sync.knowledge.rag_service import get_rag_service
+        rag = get_rag_service()
+        hits = rag.retrieve(query, city=city, top_k=max(1, min(int(top_k or 4), 8)))
+        if not hits:
+            return "知识库中未检索到直接相关的攻略片段。"
+        lines = [f"TravelMind 攻略知识库检索结果（模式：{hits[0].get('retrieval_mode', 'bm25_metadata')}）："]
+        for idx, hit in enumerate(hits, start=1):
+            lines.append(
+                f"{idx}. 【{hit.get('title', '攻略')} · {hit.get('section', '')}】（城市：{hit.get('city', '通用')}，来源：{hit.get('source', '')}）\n"
+                f"   {hit.get('content', '')}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"旅游攻略知识库检索失败：{exc}"
+
+
+@mcp.tool()
 def write_itinerary_file(title: str, markdown_content: str, filename: str = "") -> str:
     """将生成的出行方案写入本地 Markdown 文件。
 

@@ -175,6 +175,10 @@ from .markdown_writer import (
     _build_markdown,
 )
 from .providers import FlightProvider, HotelProvider, RailProvider
+try:
+    from knowledge.rag_service import get_rag_service
+except ModuleNotFoundError:
+    from sync.knowledge.rag_service import get_rag_service
 
 
 
@@ -186,6 +190,7 @@ class StructuredTravelPlanner:
         self.flight_provider = FlightProvider()
         self.hotel_provider = HotelProvider()
         self.deepseek_brain = DeepSeekPlanningBrainAgent()
+        self.rag_service = get_rag_service()
         # 真实进度事件回调（Phase 5）：threading.local 隔离——planner 是单例，
         # 线程池与后台任务线程并发时实例属性会串台。runner 线程在 run() 前
         # 设置 callback/seq，_record 首尾各发一个事件；回调异常一律吞掉，
@@ -219,6 +224,15 @@ class StructuredTravelPlanner:
             prefs,
             lambda: self._build_knowledge(prefs, pois),
         )
+        rag_bundle = self._record(
+            trace,
+            "RAGKnowledgeAgent 攻略混合检索",
+            prefs,
+            lambda: self.rag_service.retrieve_for_plan(prefs, weather, top_k=5),
+        )
+        rag_references = rag_bundle.get("references", []) if isinstance(rag_bundle, dict) else []
+        rag_snippets = rag_bundle.get("prompt_snippets", []) if isinstance(rag_bundle, dict) else []
+        rag_meta = rag_bundle.get("meta", {}) if isinstance(rag_bundle, dict) else {}
         # 片区聚类后快照候选池，保证契约携带 cluster/selection/source_meta 完整字段。
         candidate_contracts = self._build_candidate_contracts(prefs, pois, hotels, weather)
         local_transport = self._record(trace, "LocalMobilityAgent 目的地内交通", prefs, lambda: self._build_local_transport(prefs, routes, hotels))
@@ -226,7 +240,17 @@ class StructuredTravelPlanner:
             trace,
             "DeepSeekPlanningBrainAgent 智能规划脑",
             prefs,
-            lambda: self._build_deepseek_itinerary_days(prefs, routes, local_transport, hotels, pois, weather, weather_advice, knowledge),
+            lambda: self._build_deepseek_itinerary_days(
+                prefs,
+                routes,
+                local_transport,
+                hotels,
+                pois,
+                weather,
+                weather_advice,
+                knowledge,
+                rag_context=rag_snippets,
+            ),
         )
         llm_status = str(llm_plan.get("llm_status") or "fallback") if isinstance(llm_plan, dict) else "fallback"
         if isinstance(llm_plan, dict) and llm_status == "used" and llm_plan.get("itinerary_days"):
@@ -247,7 +271,17 @@ class StructuredTravelPlanner:
             trace,
             "ItineraryReviewAgent 智能体检",
             prefs,
-            lambda: self._review_and_repair_itinerary(prefs, routes, local_transport, hotels, pois, weather, weather_advice, itinerary_days),
+            lambda: self._review_and_repair_itinerary(
+                prefs,
+                routes,
+                local_transport,
+                hotels,
+                pois,
+                weather,
+                weather_advice,
+                itinerary_days,
+                rag_context=rag_snippets,
+            ),
         )
         if isinstance(review_result, dict):
             itinerary_days = review_result.get("itinerary_days") or itinerary_days
@@ -304,6 +338,7 @@ class StructuredTravelPlanner:
                 pois,
                 budget,
                 itinerary_days,
+                rag_references=rag_references,
             ),
         )
 
@@ -320,6 +355,8 @@ class StructuredTravelPlanner:
             "pois": pois,
             "candidate_contracts": candidate_contracts,
             "knowledge": knowledge,
+            "rag_references": rag_references,
+            "rag_meta": rag_meta,
             "budget": budget,
             "budget_adjustments": budget_adjustments,
             "itinerary_days": itinerary_days,
@@ -329,6 +366,40 @@ class StructuredTravelPlanner:
             "planning_mode": planning_mode,
             "llm_status": llm_status,
         }
+
+    def search_poi_by_keyword(self, city: str, keyword: str, limit: int = 8) -> dict[str, Any]:
+        """按城市与关键词精准检索真实高德 POI，供前端自由编辑插入或替换地点。"""
+        clean_city = self._clean_city(city)
+        clean_keyword = str(keyword or "").strip()
+        if not clean_keyword:
+            return {"city": clean_city, "keyword": "", "items": [], "source": "empty"}
+        bounded_limit = max(1, min(int(limit or 8), 15))
+        try:
+            raw = self.toolbox.call(
+                "search_poi_keyword",
+                city=clean_city,
+                keyword=clean_keyword,
+                limit=bounded_limit,
+            )
+            items = _parse_numbered_section(str(raw), "关键词检索结果")
+            if items:
+                return {"city": clean_city, "keyword": clean_keyword, "items": items[:bounded_limit], "source": "amap_keyword", "raw": str(raw)}
+        except Exception:
+            pass
+
+        try:
+            fallback_raw = self.toolbox.call("search_poi", city=clean_city, preference=clean_keyword)
+            fallback_text = str(fallback_raw)
+            pool = [
+                *_parse_numbered_section(fallback_text, "景点/活动"),
+                *_parse_numbered_section(fallback_text, "美食/餐厅"),
+                *_parse_numbered_section(fallback_text, "特色店铺参考"),
+            ]
+            matched = [item for item in pool if clean_keyword in f"{item.get('name', '')}{item.get('description', '')}{item.get('type', '')}"]
+            items = _dedupe_pois(matched or pool)[:bounded_limit]
+            return {"city": clean_city, "keyword": clean_keyword, "items": items, "source": "amap_fallback", "raw": fallback_text}
+        except Exception as exc:
+            return {"city": clean_city, "keyword": clean_keyword, "items": [], "source": "error", "error": str(exc)}
 
     def refine_plan(self, plan: dict[str, Any], message: str) -> dict[str, Any]:
         """结构化追问（Phase 4）：把追问应用为计划增量操作并重算派生数据。
@@ -416,7 +487,16 @@ class StructuredTravelPlanner:
             if violations:
                 quality_review["gate_violations"] = violations
         markdown = self._build_markdown(
-            prefs, routes, local_transport, hotels, weather, weather_advice, pois, budget, itinerary_days
+            prefs,
+            routes,
+            local_transport,
+            hotels,
+            weather,
+            weather_advice,
+            pois,
+            budget,
+            itinerary_days,
+            rag_references=plan.get("rag_references"),
         )
 
         new_plan = {
@@ -531,6 +611,8 @@ class StructuredTravelPlanner:
             return {"total": None, "breakdown": {}, "sources": {}, "basis": [error], "text": error}
         if "每日" in name:
             return []
+        if "RAG" in name or "攻略" in name:
+            return {"references": [], "prompt_snippets": [], "meta": {"retrieval_mode": "fallback", "hit_count": 0, "error": error}}
         if "知识" in name or "Knowledge" in name:
             return {
                 "provider_status": "unavailable",

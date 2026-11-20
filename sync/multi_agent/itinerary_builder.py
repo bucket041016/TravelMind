@@ -272,9 +272,18 @@ def _build_deepseek_itinerary_days(
     weather: dict[str, str],
     weather_advice: dict[str, str],
     knowledge: dict[str, Any] | None = None,
+    rag_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload, lookup = _planning_brain_payload(
-        prefs, routes, local_transport, hotels, pois, weather, weather_advice, knowledge
+        prefs,
+        routes,
+        local_transport,
+        hotels,
+        pois,
+        weather,
+        weather_advice,
+        knowledge,
+        rag_context=rag_context,
     )
     brain_result = self.deepseek_brain.plan(payload)
     if brain_result.get("llm_status") != "used":
@@ -349,6 +358,7 @@ def _planning_brain_payload(
     weather: dict[str, str],
     weather_advice: dict[str, str],
     knowledge: dict[str, Any] | None = None,
+    rag_context: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     candidates = []
     lookup: dict[str, dict[str, Any]] = {}
@@ -440,6 +450,7 @@ def _planning_brain_payload(
         "weather_advice": weather_advice,
         "candidates": candidates,
         "city_knowledge": city_knowledge,
+        "rag_knowledge": list(rag_context or [])[:6],
         "cluster_guidance": [
             "每天优先围绕 1 个 primary_cluster 安排活动，最多补充 1 个相邻片区",
             "不要把相距很远的 cluster 硬排在同一天相邻时段",

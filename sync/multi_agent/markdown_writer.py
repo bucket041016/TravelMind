@@ -19,6 +19,7 @@ def _build_markdown(
     pois: dict[str, Any],
     budget: dict[str, Any],
     itinerary_days: list[dict[str, Any]],
+    rag_references: list[dict[str, Any]] | None = None,
 ) -> str:
     recommended = MODE_LABELS.get(routes.get("recommended"), routes.get("recommended", ""))
     lines = [
@@ -73,6 +74,15 @@ def _build_markdown(
                     f"{segment.get('distance', '距离待核实')}｜{segment.get('price', '价格待核实')}｜"
                     f"{segment.get('summary', '')}"
                 )
+
+    if rag_references:
+        lines.extend(["", "### 攻略知识参考（RAG）"])
+        for ref in rag_references[:5]:
+            title = str(ref.get("title") or "攻略参考").strip()
+            section = str(ref.get("section") or "").strip()
+            excerpt = str(ref.get("content") or "").replace("\n", " ").strip()[:140]
+            heading = f"{title} · {section}" if section else title
+            lines.append(f"- {heading}：{excerpt}")
 
     lines.extend(
         [

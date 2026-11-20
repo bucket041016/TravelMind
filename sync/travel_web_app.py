@@ -30,9 +30,11 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 try:
+    from knowledge.rag_service import get_rag_service
     from mcp_tools_adapter import get_mcp_tools_as_langchain
     from multi_agent import MultiAgentTravelPlanner, StructuredTravelPlanner
 except ModuleNotFoundError:
+    from sync.knowledge.rag_service import get_rag_service
     from sync.mcp_tools_adapter import get_mcp_tools_as_langchain
     from sync.multi_agent import MultiAgentTravelPlanner, StructuredTravelPlanner
 
@@ -207,6 +209,28 @@ class RefinePlanRequest(BaseModel):
 
 class PlanAsyncRequest(PlanRequest):
     clientRequestId: str = ""
+
+
+class RAGDocRequest(BaseModel):
+    title: str
+    content: str
+    city: str = "通用"
+    category: str = "自定义攻略"
+    tags: list[str] | str = Field(default_factory=list)
+
+
+class RAGSearchRequest(BaseModel):
+    query: str
+    city: str = ""
+    interests: list[str] = Field(default_factory=list)
+    weather: str = ""
+    top_k: int = 5
+
+
+class POISearchRequest(BaseModel):
+    city: str
+    keyword: str
+    limit: int = 8
 
 
 app = FastAPI(title="TravelMind Agent Demo", version="0.1.0")
@@ -629,6 +653,83 @@ def task_status(task_id: str):
         if plan:
             result["plan"] = plan
     return result
+
+
+@app.get("/api/rag/docs")
+def list_rag_docs():
+    try:
+        return get_rag_service().list_documents()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/rag/docs")
+def add_rag_doc(request: RAGDocRequest):
+    try:
+        doc = get_rag_service().add_custom_document(
+            title=request.title,
+            content=request.content,
+            city=request.city,
+            category=request.category,
+            tags=request.tags,
+        )
+        return {"ok": True, "document": doc, "stats": get_rag_service().list_documents()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.delete("/api/rag/docs/{doc_id}")
+def delete_rag_doc(doc_id: str):
+    try:
+        deleted = get_rag_service().delete_custom_document(doc_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="未找到指定自定义攻略文档")
+        return {"ok": True, "doc_id": doc_id, "stats": get_rag_service().list_documents()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/rag/search")
+def search_rag(request: RAGSearchRequest):
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="query 不能为空")
+    try:
+        rag = get_rag_service()
+        hits = rag.retrieve(
+            request.query.strip(),
+            city=request.city.strip(),
+            interests=request.interests,
+            weather=request.weather.strip(),
+            top_k=max(1, min(int(request.top_k or 5), 10)),
+        )
+        return {
+            "retrieval_mode": hits[0]["retrieval_mode"] if hits else rag.retrieval_mode,
+            "count": len(hits),
+            "hits": hits,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/poi/search")
+def search_poi_for_editor(request: POISearchRequest):
+    if not request.keyword.strip():
+        raise HTTPException(status_code=400, detail="keyword 不能为空")
+    try:
+        planner = get_structured_planner()
+        return planner.search_poi_by_keyword(
+            city=request.city.strip() or "深圳",
+            keyword=request.keyword.strip(),
+            limit=request.limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/reset")
