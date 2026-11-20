@@ -18,8 +18,16 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 try:
     from knowledge import retrieve as retrieve_knowledge
+    from knowledge.local_poi_store import (
+        search_local_hotels,
+        search_local_pois,
+    )
 except ModuleNotFoundError:  # pragma: no cover - 包方式导入时回退
     from sync.knowledge import retrieve as retrieve_knowledge
+    from sync.knowledge.local_poi_store import (
+        search_local_hotels,
+        search_local_pois,
+    )
 
 mcp = FastMCP(name="travel-agent-mcp")
 
@@ -1425,6 +1433,29 @@ def _search_poi_with_amap(city: str, preference: str) -> str:
 
 
 def _search_poi_from_local(city: str, preference: str, reason: str = "") -> str:
+    # 优先使用本地离线采集的高德真实 POI 语料库（含真实坐标、地址、评分、人均）
+    pref_text = str(preference or "")
+    prefer_indoor = bool(re.search(r"室内|雨天|博物馆|美术馆|展览|避暑|文化", pref_text))
+    scenic_pois = search_local_pois(
+        city,
+        categories=("indoor_culture", "scenic") if prefer_indoor else ("scenic", "indoor_culture"),
+        limit=POI_DISPLAY_LIMIT + 4,
+    )
+    food_pois = search_local_pois(city, categories=("food_local",), limit=POI_DISPLAY_LIMIT)
+    if scenic_pois or food_pois:
+        scenic_lines = _format_poi_items(scenic_pois, limit=POI_DISPLAY_LIMIT, dedupe_nested=True)
+        food_lines = _format_poi_items(food_pois, limit=POI_DISPLAY_LIMIT, dedupe_brand=True)
+        fallback_prefix = f"高德实时 POI 搜索暂不可用（{reason}），已自动切换至本地高德离线 POI 语料库。\n" if reason else ""
+        sections = [f"{fallback_prefix}{city} 本地高德离线 POI 推荐（偏好：{preference}，provider_status=local_amap_corpus）："]
+        if scenic_lines:
+            sections.append("\n【景点/活动】")
+            sections.extend(scenic_lines)
+        if food_lines:
+            sections.append("\n【美食/餐厅】")
+            sections.extend(food_lines)
+        sections.append("\n出行提示：上述地点来自本地高德离线采集语料库（含真实坐标与评分参考），实际营业状态与票价请以出行前实时核实为准。")
+        return "\n".join(sections)
+
     poi = _get_city_poi_knowledge(city)
     specialty_lines = _format_specialty_food_items(_get_local_specialty_foods(city))
     fallback_prefix = f"高德 POI 搜索暂不可用（{reason}），已降级到本地示例库。\n" if reason else ""
@@ -1516,9 +1547,26 @@ def _hotel_area_advice(city: str, hotel_level: str, near: str = "") -> str:
     return f"优先选择{city}核心商圈、地铁枢纽或第一天重点景点附近的{level}档酒店，兼顾交通和餐饮。"
 
 
-def _search_hotels_from_local(city: str, hotel_level: str, reason: str = "", near: str = "") -> str:
-    prefix = f"酒店 POI 搜索暂不可用（{reason}），已降级到规则建议。\n" if reason else ""
+def _search_hotels_from_local(city: str, hotel_level: str, reason: str = "", near: str = "", limit: int = 6) -> str:
     area = _hotel_area_advice(city, hotel_level, near)
+    local_hotels = search_local_hotels(city, hotel_level=hotel_level, near=near, limit=limit + 4)
+    if local_hotels:
+        filtered = [poi for poi in local_hotels if not _is_unsuitable_hotel_poi(poi, hotel_level)]
+        hotel_lines = _format_poi_items(filtered or local_hotels, limit=limit, dedupe_brand=True)
+        if hotel_lines:
+            prefix = f"高德实时酒店搜索暂不可用（{reason}），已自动切换至本地高德离线 POI 语料库。\n" if reason else ""
+            return "\n".join(
+                [
+                    f"{prefix}{city} 酒店匹配结果（{hotel_level}档，provider_status=amap_fallback）",
+                    f"住宿区域建议：{area}",
+                    "搜索策略：本地高德离线语料库按住宿档位与片区匹配；候选含真实坐标与评分参考。",
+                    "\n【酒店候选】",
+                    *hotel_lines,
+                    "\n出行提示：酒店候选来自本地高德离线语料库，不代表实时房态、可订价格或平台库存；正式版本需接入酒店供应商接口。",
+                ]
+            )
+
+    prefix = f"酒店 POI 搜索暂不可用（{reason}），已降级到规则建议。\n" if reason else ""
     level = str(hotel_level or "舒适").strip() or "舒适"
     candidates = [
         f"{city}核心商圈{level}档酒店区域（示例）：适合第一次到达、晚间觅食和公共交通接驳。",
@@ -1553,7 +1601,7 @@ def search_hotels(city: str, hotel_level: str = "舒适", near: str = "", limit:
     area = _hotel_area_advice(city, hotel_level, near)
 
     if not _get_amap_key():
-        return _search_hotels_from_local(city, hotel_level, "未配置高德 Key", near)
+        return _search_hotels_from_local(city, hotel_level, "未配置高德 Key", near, limit=limit)
 
     keyword = _hotel_keyword_for_level(hotel_level)
     try:
@@ -1578,7 +1626,7 @@ def search_hotels(city: str, hotel_level: str = "舒适", near: str = "", limit:
             ]
         )
     except Exception as exc:
-        return _search_hotels_from_local(city, hotel_level, str(exc), near)
+        return _search_hotels_from_local(city, hotel_level, str(exc), near, limit=limit)
 
 
 
@@ -1659,12 +1707,29 @@ def search_poi_keyword(city: str, keyword: str, limit: int = 8) -> str:
     if not clean_keyword:
         return "请输入需要检索的地点或关键词。"
     bounded_limit = max(1, min(int(limit or 8), 15))
+
+    def _local_keyword_fallback(reason: str) -> str:
+        local_pois = search_local_pois(city, keywords=clean_keyword, limit=bounded_limit + 4)
+        local_lines = _format_poi_items(local_pois, limit=bounded_limit, dedupe_nested=False, dedupe_brand=False)
+        if local_lines:
+            return "\n".join(
+                [
+                    f"{city} 关键词「{clean_keyword}」本地高德离线 POI 搜索结果（{reason}）",
+                    "\n【关键词检索结果】",
+                    *local_lines,
+                ]
+            )
+        return f"{city} 关键词「{clean_keyword}」检索暂不可用（{reason}）。"
+
     if not _get_amap_key():
-        return f"{city} 关键词「{clean_keyword}」检索暂不可用（未配置高德 Key）。"
+        return _local_keyword_fallback("未配置高德 Key")
     try:
         pois = _amap_search_pois(city, clean_keyword, "", limit=min(bounded_limit + 4, 20))
         lines = _format_poi_items(pois, limit=bounded_limit, dedupe_nested=False, dedupe_brand=False)
         if not lines:
+            fallback_text = _local_keyword_fallback("高德实时接口未返回结果")
+            if "【关键词检索结果】" in fallback_text:
+                return fallback_text
             return f"{city} 未检索到与「{clean_keyword}」相关的高德 POI。"
         return "\n".join(
             [
@@ -1674,7 +1739,7 @@ def search_poi_keyword(city: str, keyword: str, limit: int = 8) -> str:
             ]
         )
     except Exception as exc:
-        return f"{city} 关键词「{clean_keyword}」高德 POI 检索失败：{exc}"
+        return _local_keyword_fallback(f"高德实时检索失败：{exc}")
 
 
 @mcp.tool()

@@ -6,6 +6,33 @@
 
 ---
 
+## [2026-11-20 22:37] 接入高德离线 POI 语料库兜底与全国 30 城 RAG 扩容
+
+### 意图
+- 通过高德官方 Web 服务 API（`/v3/place/text`）在本机建立可断点续传的全国 30 个重点旅游城市真实 POI 语料库（SQLite + CSV/JSON/RAG Markdown），将其接入 TravelMind 作为高德限流/离线兜底检索源，并同步扩充 RAG 知识库城市覆盖范围。
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `scripts/collect_amap_pois.py` | 新增 | 全国 30 个重点旅游城市高德官方 POI 离线采集与导出工具（SQLite 去重、任务断点续传、QPS 控频、配额触顶优雅暂停、一键导出 CSV/JSON/RAG Markdown） |
+| `sync/knowledge/local_poi_store.py` | 新增 | 本地 SQLite 高德离线 POI 语料库只读查询模块（支持分类筛选、关键词打分、酒店档位与就近地标排序、缺失时静默降级） |
+| `sync/fastmcp_server_streamhttp.py` | 修改 | `search_poi`、`search_hotels`、`search_poi_keyword` 在高德实时接口不可用/限流/返回空时自动切换本地高德离线 POI 语料库兜底 |
+| `sync/multi_agent/structured_planner.py` | 修改 | `search_poi_by_keyword` 增加本地 SQLite 语料库最终兜底 |
+| `tests/test_rag_and_editing.py` | 新增用例 | 增加 `LocalPoiStoreFallbackTests` 覆盖本地离线 POI 分类/关键词检索、酒店档位排序与缺失降级 |
+| `.gitignore` | 修改 | 忽略自动导出的 `/knowledge_base/custom/amap_*_pois.md`（保留本地实时加载，不污染仓库） |
+
+### 验证
+- [x] 本机 30 城扩量采集完成：693 页零失败，去重入库 **13,517 条**真实高德 POI（风景名胜 3,597 / 酒店 3,588 / 热门餐饮 3,360 / 博物馆与室内文化 2,972）
+- [x] 一键导出全量 CSV、30 城结构化 JSON，并同步 30 篇高分片区 Markdown 至本地 RAG（RAG 总索引由 12 篇 / 59 分块扩容至 **42 篇 / 321 分块**）
+- [x] `py_compile` 通过
+- [x] 全量单元测试 **262 / 262** 全部通过（含离线 139 次调用基线、发布质量门与新增本地 POI 语料库单测）
+- [x] 已重启 8098 + 8010 双服务加载最新兜底逻辑与 42 篇 RAG 知识库并推送至 `origin/Ay`
+
+### 备注
+- `data/amap_poi_corpus.db`、`data/exports/` 与 `knowledge_base/custom/amap_*_pois.md` 均保存在本机并被 `.gitignore` 忽略；其他机器或 CI 环境无本地库时自动静默回落既有逻辑，保持零破坏。
+
+---
+
 ## [2026-11-20 21:48] 新增旅游攻略混合检索 RAG 与行程全面可视化自由编辑
 
 ### 意图

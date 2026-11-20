@@ -376,5 +376,97 @@ class MarkdownWriterAndFrontendContractTests(unittest.TestCase):
             self.assertIn(token, css)
 
 
+class LocalPoiStoreFallbackTests(unittest.TestCase):
+    """验证本地高德离线 SQLite 语料库的分类检索、酒店档位筛选与缺失降级。"""
+
+    def setUp(self):
+        import sqlite3
+        from sync.knowledge.local_poi_store import (
+            corpus_stats,
+            search_local_hotels,
+            search_local_pois,
+        )
+
+        self.search_local_pois = search_local_pois
+        self.search_local_hotels = search_local_hotels
+        self.corpus_stats = corpus_stats
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="tm_local_poi_"))
+        self.db_path = self.tmp_dir / "test_poi.db"
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.executescript(
+            """
+            CREATE TABLE pois (
+                poi_id TEXT PRIMARY KEY,
+                city TEXT NOT NULL,
+                category TEXT NOT NULL,
+                category_label TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type_name TEXT,
+                typecode TEXT,
+                pname TEXT,
+                cityname TEXT,
+                adname TEXT,
+                business_area TEXT,
+                address TEXT,
+                lng REAL,
+                lat REAL,
+                rating REAL,
+                cost REAL,
+                tel TEXT,
+                tag TEXT,
+                raw_json TEXT,
+                fetched_at TEXT NOT NULL
+            );
+            """
+        )
+        rows = [
+            ("P1", "南京", "indoor_culture", "博物馆与室内文化", "南京博物院", "科教文化服务;博物馆", "140100", "江苏省", "南京市", "玄武区", "明故宫", "中山东路321号", 118.825, 32.041, 4.9, 0.0, "", "历史,室内", "{}", "2026-11-20"),
+            ("P2", "南京", "scenic", "风景名胜", "夫子庙秦淮风光带", "风景名胜;公园广场", "110000", "江苏省", "南京市", "秦淮区", "夫子庙", "贡院西街", 118.789, 32.021, 4.6, 0.0, "", "夜景", "{}", "2026-11-20"),
+            ("P3", "南京", "food_local", "热门餐饮与地方菜", "南京大牌档(夫子庙店)", "餐饮服务;中餐厅", "050100", "江苏省", "南京市", "秦淮区", "夫子庙", "大石坝街48号", 118.791, 32.020, 4.7, 88.0, "", "盐水鸭,老字号", "{}", "2026-11-20"),
+            ("H1", "南京", "hotel", "酒店与住宿", "南京丽思卡尔顿酒店", "住宿服务;五星级宾馆", "100102", "江苏省", "南京市", "玄武区", "新街口", "中山路18号", 118.784, 32.042, 4.9, 1680.0, "", "豪华", "{}", "2026-11-20"),
+            ("H2", "南京", "hotel", "酒店与住宿", "亚朵酒店(南京夫子庙店)", "住宿服务;宾馆酒店", "100100", "江苏省", "南京市", "秦淮区", "夫子庙", "建康路128号", 118.790, 32.023, 4.8, 398.0, "", "商务", "{}", "2026-11-20"),
+            ("H3", "南京", "hotel", "酒店与住宿", "如家快捷酒店(新街口店)", "住宿服务;经济型连锁酒店", "100105", "江苏省", "南京市", "秦淮区", "新街口", "洪武路80号", 118.785, 32.038, 4.3, 198.0, "", "经济", "{}", "2026-11-20"),
+        ]
+        conn.executemany(
+            "INSERT INTO pois VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_search_local_pois_and_hotels(self):
+        stats = self.corpus_stats(self.db_path)
+        self.assertTrue(stats["available"])
+        self.assertEqual(stats["total_pois"], 6)
+        self.assertEqual(stats["city_count"], 1)
+
+        indoor = self.search_local_pois("南京市", categories=("indoor_culture",), limit=5, db_path=self.db_path)
+        self.assertEqual(len(indoor), 1)
+        self.assertEqual(indoor[0]["name"], "南京博物院")
+        self.assertEqual(indoor[0]["location"], "118.825,32.041")
+        self.assertEqual(indoor[0]["biz_ext"]["rating"], "4.9")
+
+        kw_hits = self.search_local_pois("南京", keywords="盐水鸭", limit=5, db_path=self.db_path)
+        self.assertEqual(len(kw_hits), 1)
+        self.assertIn("南京大牌档", kw_hits[0]["name"])
+
+        lux = self.search_local_hotels("南京", hotel_level="高端", limit=3, db_path=self.db_path)
+        self.assertEqual(lux[0]["name"], "南京丽思卡尔顿酒店")
+
+        comfort = self.search_local_hotels("南京", hotel_level="舒适", near="夫子庙", limit=3, db_path=self.db_path)
+        self.assertEqual(comfort[0]["name"], "亚朵酒店(南京夫子庙店)")
+
+        budget = self.search_local_hotels("南京", hotel_level="经济", limit=3, db_path=self.db_path)
+        self.assertEqual(budget[0]["name"], "如家快捷酒店(新街口店)")
+
+    def test_missing_or_disabled_db_degrades_safely(self):
+        self.assertEqual(self.search_local_pois("南京", db_path="off"), [])
+        self.assertEqual(self.search_local_hotels("南京", db_path=self.tmp_dir / "missing.db"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -176,8 +176,10 @@ from .markdown_writer import (
 )
 from .providers import FlightProvider, HotelProvider, RailProvider
 try:
+    from knowledge.local_poi_store import search_local_pois
     from knowledge.rag_service import get_rag_service
 except ModuleNotFoundError:
+    from sync.knowledge.local_poi_store import search_local_pois
     from sync.knowledge.rag_service import get_rag_service
 
 
@@ -397,9 +399,55 @@ class StructuredTravelPlanner:
             ]
             matched = [item for item in pool if clean_keyword in f"{item.get('name', '')}{item.get('description', '')}{item.get('type', '')}"]
             items = _dedupe_pois(matched or pool)[:bounded_limit]
-            return {"city": clean_city, "keyword": clean_keyword, "items": items, "source": "amap_fallback", "raw": fallback_text}
-        except Exception as exc:
-            return {"city": clean_city, "keyword": clean_keyword, "items": [], "source": "error", "error": str(exc)}
+            if items:
+                return {"city": clean_city, "keyword": clean_keyword, "items": items, "source": "amap_fallback", "raw": fallback_text}
+        except Exception:
+            pass
+
+        local_pois = search_local_pois(clean_city, keywords=clean_keyword, limit=bounded_limit)
+        if local_pois:
+            converted: list[dict[str, Any]] = []
+            for poi in local_pois:
+                loc_str = str(poi.get("location") or "")
+                location = None
+                if "," in loc_str:
+                    parts = loc_str.split(",", 1)
+                    try:
+                        location = {"lng": float(parts[0]), "lat": float(parts[1])}
+                    except ValueError:
+                        location = None
+                biz = poi.get("biz_ext") if isinstance(poi.get("biz_ext"), dict) else {}
+                rating = biz.get("rating")
+                cost = biz.get("cost")
+                desc_parts = [
+                    str(poi.get("adname") or "").strip(),
+                    str(poi.get("address") or "").strip(),
+                    f"评分 {rating}" if rating else "",
+                    f"人均 {cost} 元" if cost else "",
+                ]
+                converted.append(
+                    {
+                        "name": poi.get("name") or "",
+                        "type": poi.get("type") or "",
+                        "address": poi.get("address") or "",
+                        "district": poi.get("adname") or "",
+                        "location": location,
+                        "rating": float(rating) if rating else None,
+                        "cost": float(cost) if cost else None,
+                        "description": " | ".join(p for p in desc_parts if p),
+                        "is_real_place": bool(location),
+                        "source": "local_amap_corpus",
+                    }
+                )
+            return {
+                "city": clean_city,
+                "keyword": clean_keyword,
+                "items": converted[:bounded_limit],
+                "source": "local_amap_corpus",
+                "raw": "",
+            }
+
+        return {"city": clean_city, "keyword": clean_keyword, "items": [], "source": "empty"}
 
     def refine_plan(self, plan: dict[str, Any], message: str) -> dict[str, Any]:
         """结构化追问（Phase 4）：把追问应用为计划增量操作并重算派生数据。
