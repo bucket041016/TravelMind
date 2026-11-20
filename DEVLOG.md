@@ -33,8 +33,8 @@
 ### 验证
 - [x] `py_compile` 通过（全部修改及仓库 Python 文件）
 - [x] `node --check web/app.js` 通过
-- [x] 新增单元测试 `tests/test_rag_and_editing.py` 8/8 通过
-- [x] 既有 `sync.knowledge.retrieve` 与 `tests/test_phase5_persistence.py` 10/10 通过（本机默认 Python 未安装 fastmcp/fastapi/langchain，全量回归与 E2E 需在项目依赖虚拟环境中执行）
+- [x] 全量单元测试 260/260 通过（含离线 139 次调用评测基线、`TRAVELMIND_KNOWLEDGE` 灰度一致性、FastMCP 协议测试、Phase 5 异步 SSE 事件测试及新增 8 项 `tests/test_rag_and_editing.py`）
+- [x] 浏览器真实验收通过（8098 + 8010 双服务）：广州 → 深圳 2 天游生成成功，RAG 攻略参考命中 4 条；内联自定义时间（`10:15-12:15`）、高德关键词搜 POI（`南山博物馆` 返回 8 条并加入 `南头古城博物馆` 联动地图标注）、新增第 3 天 + 撤销恢复、攻略知识库弹窗（12 篇 / 59 分块）检索测试全部通过，控制台零 JS 报错
 - [x] 已基于 `origin/main` 提交并快进推送至 `origin/Ay` 分支
 
 ### 备注

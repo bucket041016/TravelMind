@@ -3988,22 +3988,36 @@ body.travelmind-v2 {
   margin-top: 4px;
 }
 
-.modal-form-actions .primary-button {
-  min-width: 148px;
-  min-height: 38px;
+.modal-form-actions .primary-button,
+body.travelmind-v2 .modal-card .primary-button,
+body.travelmind-v2 .inline-editor-actions .primary-button {
+  width: auto;
+  min-width: 112px;
+  min-height: 36px;
   padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .modal-search-bar {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
   margin-bottom: 12px;
 }
 
+.modal-search-bar input {
+  width: 100%;
+  min-width: 0;
+}
+
 .modal-search-bar .primary-button {
   min-height: 36px;
-  padding: 0 14px;
+  padding: 0 16px;
   font-size: 13px;
 }
 
