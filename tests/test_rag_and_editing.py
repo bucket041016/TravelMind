@@ -79,7 +79,10 @@ class TravelRAGUnifiedCorpusTests(unittest.TestCase):
         self.assertIn("策展城市库", categories)
 
         cities = {doc["city"] for doc in listing["documents"]}
-        for expected in ("深圳", "广州", "厦门", "北京", "上海", "杭州", "成都", "西安", "福州", "三亚", "重庆"):
+        for expected in (
+            "深圳", "广州", "厦门", "北京", "上海", "杭州", "成都", "西安", "福州",
+            "三亚", "重庆", "南京", "苏州", "青岛", "长沙",
+        ):
             self.assertIn(expected, cities)
 
     def test_shenzhen_curated_rainy_retrieval_and_city_isolation(self):
@@ -382,13 +385,17 @@ class LocalPoiStoreFallbackTests(unittest.TestCase):
     def setUp(self):
         import sqlite3
         from sync.knowledge.local_poi_store import (
+            city_price_and_district_profile,
             corpus_stats,
             search_local_hotels,
+            search_local_hubs,
             search_local_pois,
         )
 
         self.search_local_pois = search_local_pois
         self.search_local_hotels = search_local_hotels
+        self.search_local_hubs = search_local_hubs
+        self.city_price_and_district_profile = city_price_and_district_profile
         self.corpus_stats = corpus_stats
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="tm_local_poi_"))
         self.db_path = self.tmp_dir / "test_poi.db"
@@ -427,6 +434,8 @@ class LocalPoiStoreFallbackTests(unittest.TestCase):
             ("H1", "南京", "hotel", "酒店与住宿", "南京丽思卡尔顿酒店", "住宿服务;五星级宾馆", "100102", "江苏省", "南京市", "玄武区", "新街口", "中山路18号", 118.784, 32.042, 4.9, 1680.0, "", "豪华", "{}", "2026-11-20"),
             ("H2", "南京", "hotel", "酒店与住宿", "亚朵酒店(南京夫子庙店)", "住宿服务;宾馆酒店", "100100", "江苏省", "南京市", "秦淮区", "夫子庙", "建康路128号", 118.790, 32.023, 4.8, 398.0, "", "商务", "{}", "2026-11-20"),
             ("H3", "南京", "hotel", "酒店与住宿", "如家快捷酒店(新街口店)", "住宿服务;经济型连锁酒店", "100105", "江苏省", "南京市", "秦淮区", "新街口", "洪武路80号", 118.785, 32.038, 4.3, 198.0, "", "经济", "{}", "2026-11-20"),
+            ("T1", "南京", "transport_hub", "交通枢纽", "南京南站", "交通设施服务;火车站", "150200", "江苏省", "南京市", "雨花台区", "", "玉兰路98号", 118.798, 31.969, 4.7, None, "", "高铁站", "{}", "2026-11-20"),
+            ("T2", "南京", "transport_hub", "交通枢纽", "南京南站停车场", "交通设施服务;停车场", "150900", "江苏省", "南京市", "雨花台区", "", "玉兰路98号", 118.799, 31.969, 4.1, None, "", "", "{}", "2026-11-20"),
         ]
         conn.executemany(
             "INSERT INTO pois VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -441,7 +450,7 @@ class LocalPoiStoreFallbackTests(unittest.TestCase):
     def test_search_local_pois_and_hotels(self):
         stats = self.corpus_stats(self.db_path)
         self.assertTrue(stats["available"])
-        self.assertEqual(stats["total_pois"], 6)
+        self.assertEqual(stats["total_pois"], 8)
         self.assertEqual(stats["city_count"], 1)
 
         indoor = self.search_local_pois("南京市", categories=("indoor_culture",), limit=5, db_path=self.db_path)
@@ -462,6 +471,17 @@ class LocalPoiStoreFallbackTests(unittest.TestCase):
 
         budget = self.search_local_hotels("南京", hotel_level="经济", limit=3, db_path=self.db_path)
         self.assertEqual(budget[0]["name"], "如家快捷酒店(新街口店)")
+
+        hubs = self.search_local_hubs("南京", limit=5, db_path=self.db_path)
+        self.assertEqual([h["name"] for h in hubs], ["南京南站"])
+
+        profile = self.city_price_and_district_profile("南京", db_path=self.db_path)
+        self.assertTrue(profile["available"])
+        self.assertEqual(profile["food_median_cost"], 88.0)
+        self.assertEqual(profile["hotel_budget_median"], 198.0)
+        self.assertEqual(profile["hotel_comfort_median"], 398.0)
+        self.assertEqual(profile["hotel_luxury_median"], 1680.0)
+        self.assertTrue(profile["top_districts"])
 
     def test_missing_or_disabled_db_degrades_safely(self):
         self.assertEqual(self.search_local_pois("南京", db_path="off"), [])

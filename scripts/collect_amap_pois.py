@@ -73,6 +73,11 @@ CATEGORY_SPECS: dict[str, dict[str, str]] = {
         "types": "100100|100200",
         "keywords": "",
     },
+    "transport_hub": {
+        "label": "交通枢纽（高铁/机场/码头）",
+        "types": "150200|150104|150300",
+        "keywords": "火车站|高铁站|机场|客运港|码头",
+    },
 }
 
 QUOTA_EXCEEDED_CODES = {"10003", "10004", "10044"}
@@ -434,15 +439,115 @@ def cmd_stats(args: argparse.Namespace) -> int:
         "SUM(CASE WHEN category='scenic' THEN 1 ELSE 0 END) AS scenic_cnt, "
         "SUM(CASE WHEN category='indoor_culture' THEN 1 ELSE 0 END) AS indoor_cnt, "
         "SUM(CASE WHEN category='food_local' THEN 1 ELSE 0 END) AS food_cnt, "
-        "SUM(CASE WHEN category='hotel' THEN 1 ELSE 0 END) AS hotel_cnt "
+        "SUM(CASE WHEN category='hotel' THEN 1 ELSE 0 END) AS hotel_cnt, "
+        "SUM(CASE WHEN category='transport_hub' THEN 1 ELSE 0 END) AS hub_cnt "
         "FROM pois GROUP BY city ORDER BY cnt DESC LIMIT 30"
     ):
         print(
             f"  - {row['city']}: 共 {row['cnt']} 条"
-            f"（景点 {row['scenic_cnt']} / 室内馆 {row['indoor_cnt']} / 美食 {row['food_cnt']} / 酒店 {row['hotel_cnt']}）"
+            f"（景点 {row['scenic_cnt']} / 室内馆 {row['indoor_cnt']} / 美食 {row['food_cnt']} / 酒店 {row['hotel_cnt']} / 枢纽 {row['hub_cnt']}）"
         )
     conn.close()
     return 0
+
+
+def _median(values: list[float]) -> float | None:
+    clean = sorted(v for v in values if v is not None and v > 0)
+    if not clean:
+        return None
+    mid = len(clean) // 2
+    if len(clean) % 2 == 1:
+        return round(clean[mid], 1)
+    return round((clean[mid - 1] + clean[mid]) / 2.0, 1)
+
+
+def _build_city_profile(city: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """基于本地真实高德 POI 聚合城市交通枢纽、热门游玩片区与真实人均价格基线。"""
+    district_buckets: dict[str, dict[str, int]] = {}
+    food_costs: list[float] = []
+    hotel_costs_all: list[float] = []
+    hotel_costs_budget: list[float] = []
+    hotel_costs_comfort: list[float] = []
+    hotel_costs_luxury: list[float] = []
+    hubs: list[dict[str, Any]] = []
+    seen_hub_names: set[str] = set()
+
+    for item in items:
+        cat = item["category"]
+        adname = (item.get("adname") or "").strip()
+        cost = item.get("cost")
+        if adname and cat in {"scenic", "indoor_culture", "food_local", "hotel"}:
+            bucket = district_buckets.setdefault(
+                adname, {"scenic": 0, "indoor": 0, "food": 0, "hotel": 0, "total": 0}
+            )
+            if cat == "scenic":
+                bucket["scenic"] += 1
+            elif cat == "indoor_culture":
+                bucket["indoor"] += 1
+            elif cat == "food_local":
+                bucket["food"] += 1
+            elif cat == "hotel":
+                bucket["hotel"] += 1
+            bucket["total"] += 1
+
+        if cat == "food_local" and cost and 15 <= cost <= 1000:
+            food_costs.append(float(cost))
+        elif cat == "hotel" and cost and 60 <= cost <= 5000:
+            c = float(cost)
+            hotel_costs_all.append(c)
+            if c <= 280:
+                hotel_costs_budget.append(c)
+            elif c <= 650:
+                hotel_costs_comfort.append(c)
+            else:
+                hotel_costs_luxury.append(c)
+        elif cat == "transport_hub":
+            name = item["name"]
+            if name not in seen_hub_names and any(k in name for k in ("站", "机场", "码头", "港")):
+                # 过滤掉纯停车场/出入口/售票厅子点，保留主枢纽
+                if not any(noise in name for noise in ("停车场", "售票", "出口", "入口", "卫生间", "充电", "贵宾")):
+                    seen_hub_names.add(name)
+                    hubs.append(
+                        {
+                            "name": name,
+                            "adname": adname,
+                            "address": item.get("address") or "",
+                            "lng": item.get("lng"),
+                            "lat": item.get("lat"),
+                            "type_name": item.get("type_name") or "",
+                        }
+                    )
+
+    top_districts = sorted(
+        (
+            {
+                "district": dist,
+                "scenic": counts["scenic"],
+                "indoor_culture": counts["indoor"],
+                "food_local": counts["food"],
+                "hotel": counts["hotel"],
+                "play_score": counts["scenic"] * 2 + counts["indoor"] * 2 + counts["food"],
+            }
+            for dist, counts in district_buckets.items()
+        ),
+        key=lambda d: (-d["play_score"], -d["scenic"], d["district"]),
+    )[:5]
+
+    return {
+        "city": city,
+        "total_pois": len(items),
+        "major_hubs": hubs[:8],
+        "top_districts": top_districts,
+        "price_baseline": {
+            "food_median_cost": _median(food_costs),
+            "food_samples": len(food_costs),
+            "hotel_median_cost": _median(hotel_costs_all),
+            "hotel_budget_median": _median(hotel_costs_budget),
+            "hotel_comfort_median": _median(hotel_costs_comfort),
+            "hotel_luxury_median": _median(hotel_costs_luxury),
+            "hotel_samples": len(hotel_costs_all),
+        },
+    }
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -485,11 +590,15 @@ def cmd_export(args: argparse.Namespace) -> int:
         item = {k: row[k] for k in fieldnames}
         by_city.setdefault(row["city"], []).append(item)
 
+    city_profiles: dict[str, dict[str, Any]] = {}
     for city, items in by_city.items():
+        profile = _build_city_profile(city, items)
+        city_profiles[city] = profile
         city_json = {
             "city": city,
             "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "total_pois": len(items),
+            "profile": profile,
             "categories": {
                 cat: [x for x in items if x["category"] == cat]
                 for cat in CATEGORY_SPECS
@@ -500,18 +609,50 @@ def cmd_export(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
 
-        # 生成可直接放进 knowledge_base/custom/ 的高德真实片区与高分清单 Markdown
+        # 生成可直接放进 knowledge_base/custom/ 的高德真实片区、枢纽、价格基线与高分清单 Markdown
         md_lines = [
             "---",
-            f"title: {city}高德真实 POI 片区与高分清单",
+            f"title: {city}高德真实 POI 片区与价格画像",
             f"city: {city}",
             "category: 离线高德POI汇总",
-            "tags: 景点, 室内场馆, 美食, 酒店, 片区分布",
-            "source: 高德开放平台离线采集",
+            "tags: 景点, 室内场馆, 美食, 酒店, 片区分布, 交通枢纽, 预算参考",
+            "source: 高德开放平台离线采集与统计聚合",
             "---",
             "",
+            f"## {city}核心游玩片区、交通枢纽与真实消费参考",
         ]
+        if profile["major_hubs"]:
+            hub_str = "、".join(
+                f"{h['name']}（{h['adname']}）" if h.get("adname") else h["name"]
+                for h in profile["major_hubs"][:6]
+            )
+            md_lines.append(f"- **主要到达与返程交通枢纽**：{hub_str}。")
+        if profile["top_districts"]:
+            dist_parts = [
+                f"{d['district']}（景点 {d['scenic']} / 室内馆 {d['indoor_culture']} / 餐饮 {d['food_local']} / 酒店 {d['hotel']}）"
+                for d in profile["top_districts"][:4]
+            ]
+            md_lines.append(f"- **高密度游玩与住宿核心片区（建议按片区串线减少跨区折返）**：{'；'.join(dist_parts)}。")
+        pb = profile["price_baseline"]
+        price_bits = []
+        if pb.get("food_median_cost"):
+            price_bits.append(f"热门餐饮人均中位数约 {int(pb['food_median_cost'])} 元（样本 {pb['food_samples']} 家）")
+        if pb.get("hotel_budget_median") or pb.get("hotel_comfort_median") or pb.get("hotel_luxury_median"):
+            h_bits = []
+            if pb.get("hotel_budget_median"):
+                h_bits.append(f"经济约 {int(pb['hotel_budget_median'])} 元/晚")
+            if pb.get("hotel_comfort_median"):
+                h_bits.append(f"舒适约 {int(pb['hotel_comfort_median'])} 元/晚")
+            if pb.get("hotel_luxury_median"):
+                h_bits.append(f"高端约 {int(pb['hotel_luxury_median'])} 元/晚")
+            price_bits.append("酒店参考中位价：" + " / ".join(h_bits) + f"（样本 {pb['hotel_samples']} 家）")
+        if price_bits:
+            md_lines.append(f"- **本地真实消费基线（高德样本聚合）**：{'；'.join(price_bits)}。")
+        md_lines.append("")
+
         for cat, spec in CATEGORY_SPECS.items():
+            if cat == "transport_hub":
+                continue
             cat_items = [x for x in items if x["category"] == cat]
             if not cat_items:
                 continue
@@ -527,9 +668,13 @@ def cmd_export(args: argparse.Namespace) -> int:
 
         (rag_dir / f"amap_{city}_pois.md").write_text("\n".join(md_lines), encoding="utf-8")
 
+    profiles_path = export_dir / "city_profiles.json"
+    profiles_path.write_text(json.dumps(city_profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+
     conn.close()
     print(f"导出完成：共 {len(rows)} 条 POI，覆盖 {len(by_city)} 个城市。")
     print(f"  - 全量 CSV：{csv_path.resolve()}")
+    print(f"  - 城市画像总表：{profiles_path.resolve()}")
     print(f"  - 城市 JSON 目录：{json_dir.resolve()}")
     print(f"  - RAG Markdown 目录：{rag_dir.resolve()}")
     if args.sync_to_rag:

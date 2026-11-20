@@ -6,6 +6,30 @@
 
 ---
 
+## [2026-11-20 23:16] 补采 30 城交通枢纽、生成价格与片区画像并扩充 6 城策展知识库
+
+### 意图
+- 从“堆 POI 数量”转向“补齐高信息密度维度”：补采 30 城高铁站/机场/码头真实枢纽坐标，基于 1.4 万+ 本地样本离线聚合各城消费中位价与高密度游玩片区，并将精编策展知识库 `sync/knowledge/cities/` 从 9 城扩容至 15 城（补齐预约规则、周一闭馆、建议时长、雨天室内替代与季节提示）。
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `scripts/collect_amap_pois.py` | 修改 | 新增 `transport_hub` 交通枢纽分类采集；`export` 新增城市片区密度、交通枢纽与真实酒店/餐饮中位价聚合画像（输出 `data/exports/city_profiles.json` 并写入 30 城 RAG Markdown） |
+| `sync/knowledge/local_poi_store.py` | 修改 | 新增 `search_local_hubs()`（过滤停车场/出入口噪声）与 `city_price_and_district_profile()` 实时聚合函数 |
+| `sync/knowledge/cities/chongqing.json`、`sanya.json`、`nanjing.json`、`suzhou.json`、`qingdao.json`、`changsha.json` | 新增 | 6 个高频旅游城市精编策展知识库（对齐高德真实 POI 名称，涵盖片区、预约/闭馆规则、雨天室内替代、美食与季节贴士） |
+| `tests/test_rag_and_editing.py` | 修改 | 补充 15 城策展加载校验及 `search_local_hubs`、`city_price_and_district_profile` 单元测试 |
+
+### 验证
+- [x] 本机 30 城交通枢纽采集完成（30 次请求 0 失败，新增 589 条）；本地高德 SQLite 总计 **14,106 条**去重真实 POI（723 页 0 失败）
+- [x] 已导出 30 城 `city_profiles.json` 并更新 RAG 知识库，总索引扩容至 **48 篇攻略 / 392 个语义分块**（15 城策展 JSON + 3 篇内置 Markdown + 30 城高德片区价格画像 Markdown）
+- [x] 全量单元测试 **262 / 262** 通过，发布质量门通过（`拉萨` 仍保留作为 `not_covered` 回归用例）
+- [x] 已重启 8098 + 8010 双服务热生效并推送至 `origin/Ay`
+
+### 备注
+- 若后续希望激活 RAG 的 `hybrid_bm25_vector`（BM25 + 向量 RRF 融合重排），只需在 `.env` 配置 `RAG_EMBEDDING_API_KEY`（兼容 OpenAI `/embeddings` 接口，如 `BAAI/bge-m3`），无需改动代码。
+
+---
+
 ## [2026-11-20 22:37] 接入高德离线 POI 语料库兜底与全国 30 城 RAG 扩容
 
 ### 意图

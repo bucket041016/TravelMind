@@ -243,3 +243,128 @@ def search_local_hotels(
 
     scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
     return [_row_to_amap_poi(item[3]) for item in scored[:bounded_limit]]
+
+
+def search_local_hubs(
+    city: str,
+    *,
+    limit: int = 6,
+    db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """查询城市的本地离线高德交通枢纽（高铁站/火车站/机场/客运码头）真实坐标。"""
+    path = _resolve_db_path(db_path)
+    clean_city = _normalize_city(city)
+    if path is None or not clean_city:
+        return []
+
+    bounded_limit = max(1, min(int(limit or 6), 15))
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM pois WHERE (city = ? OR cityname LIKE ?) AND category = 'transport_hub' "
+            "ORDER BY name ASC LIMIT 80",
+            (clean_city, f"{clean_city}%"),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+
+    filtered: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    noise_words = ("停车场", "售票", "出口", "入口", "卫生间", "充电", "贵宾", "接送点")
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        if not name or name in seen_names:
+            continue
+        if any(w in name for w in noise_words):
+            continue
+        if not any(k in name for k in ("站", "机场", "码头", "港")):
+            continue
+        seen_names.add(name)
+        filtered.append(_row_to_amap_poi(row))
+        if len(filtered) >= bounded_limit:
+            break
+    return filtered
+
+
+def _median_positive(values: list[float]) -> float | None:
+    clean = sorted(v for v in values if v > 0)
+    if not clean:
+        return None
+    mid = len(clean) // 2
+    if len(clean) % 2 == 1:
+        return round(clean[mid], 1)
+    return round((clean[mid - 1] + clean[mid]) / 2.0, 1)
+
+
+def city_price_and_district_profile(
+    city: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """基于本地离线高德语料实时聚合城市消费中位价与核心游玩行政区画像。"""
+    path = _resolve_db_path(db_path)
+    clean_city = _normalize_city(city)
+    if path is None or not clean_city:
+        return {"available": False, "city": clean_city}
+
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT category, adname, cost FROM pois WHERE (city = ? OR cityname LIKE ?)",
+            (clean_city, f"{clean_city}%"),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return {"available": False, "city": clean_city}
+
+    if not rows:
+        return {"available": False, "city": clean_city}
+
+    district_counts: dict[str, dict[str, int]] = {}
+    food_costs: list[float] = []
+    hotel_budget: list[float] = []
+    hotel_comfort: list[float] = []
+    hotel_luxury: list[float] = []
+
+    for row in rows:
+        cat = str(row["category"] or "")
+        adname = str(row["adname"] or "").strip()
+        cost = float(row["cost"]) if row["cost"] is not None else 0.0
+        if adname and cat in {"scenic", "indoor_culture", "food_local", "hotel"}:
+            bucket = district_counts.setdefault(adname, {"scenic": 0, "indoor_culture": 0, "food_local": 0, "hotel": 0})
+            bucket[cat] += 1
+        if cat == "food_local" and 15 <= cost <= 1000:
+            food_costs.append(cost)
+        elif cat == "hotel" and 60 <= cost <= 5000:
+            if cost <= 280:
+                hotel_budget.append(cost)
+            elif cost <= 650:
+                hotel_comfort.append(cost)
+            else:
+                hotel_luxury.append(cost)
+
+    top_districts = sorted(
+        (
+            {
+                "district": dist,
+                **counts,
+                "play_score": counts["scenic"] * 2 + counts["indoor_culture"] * 2 + counts["food_local"],
+            }
+            for dist, counts in district_counts.items()
+        ),
+        key=lambda d: (-d["play_score"], d["district"]),
+    )[:4]
+
+    return {
+        "available": True,
+        "city": clean_city,
+        "sample_pois": len(rows),
+        "top_districts": top_districts,
+        "food_median_cost": _median_positive(food_costs),
+        "hotel_budget_median": _median_positive(hotel_budget),
+        "hotel_comfort_median": _median_positive(hotel_comfort),
+        "hotel_luxury_median": _median_positive(hotel_luxury),
+    }
