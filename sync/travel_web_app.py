@@ -33,10 +33,36 @@ try:
     from knowledge.rag_service import get_rag_service
     from mcp_tools_adapter import get_mcp_tools_as_langchain
     from multi_agent import MultiAgentTravelPlanner, StructuredTravelPlanner
+    from presets import get_preset, list_presets
+    from security import (
+        acquire_plan_quota,
+        acquire_refine_quota,
+        enforce_token_bucket,
+        get_concurrency_guard,
+        get_quota_store,
+        public_mode_enabled,
+        quota_status_for_ip,
+        redact_error_text,
+        require_admin_if_public,
+        resolve_client_ip,
+    )
 except ModuleNotFoundError:
     from sync.knowledge.rag_service import get_rag_service
     from sync.mcp_tools_adapter import get_mcp_tools_as_langchain
     from sync.multi_agent import MultiAgentTravelPlanner, StructuredTravelPlanner
+    from sync.presets import get_preset, list_presets
+    from sync.security import (
+        acquire_plan_quota,
+        acquire_refine_quota,
+        enforce_token_bucket,
+        get_concurrency_guard,
+        get_quota_store,
+        public_mode_enabled,
+        quota_status_for_ip,
+        redact_error_text,
+        require_admin_if_public,
+        resolve_client_ip,
+    )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_ROOT / "web"
@@ -176,7 +202,7 @@ class TravelAgent:
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., max_length=800)
 
 
 class ChatResponse(BaseModel):
@@ -186,61 +212,77 @@ class ChatResponse(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    originCity: str = "广州"
-    destinationCity: str = "深圳"
-    startDate: str = ""
+    originCity: str = Field(default="广州", max_length=40)
+    destinationCity: str = Field(default="深圳", max_length=40)
+    startDate: str = Field(default="", max_length=32)
     days: int = 2
     travelers: int = 1
     budget: int | None = None
     intercityModes: list[str] = Field(default_factory=lambda: ["高铁/动车/城际", "自驾"])
     localModes: list[str] = Field(default_factory=lambda: ["公共交通", "打车", "步行"])
-    hotelLevel: str = "舒适"
+    hotelLevel: str = Field(default="舒适", max_length=20)
     interests: list[str] = Field(default_factory=lambda: ["经典景点", "美食", "地方特色"])
     preferenceProfile: dict[str, object] = Field(default_factory=dict)
-    freeText: str = ""
+    freeText: str = Field(default="", max_length=1200)
     hardConstraints: list[str] = Field(default_factory=list)
     softPreferences: list[str] = Field(default_factory=list)
 
 
 class RefinePlanRequest(BaseModel):
     plan: dict[str, object]
-    message: str
+    message: str = Field(..., max_length=500)
 
 
 class PlanAsyncRequest(PlanRequest):
-    clientRequestId: str = ""
+    clientRequestId: str = Field(default="", max_length=80)
 
 
 class RAGDocRequest(BaseModel):
-    title: str
-    content: str
-    city: str = "通用"
-    category: str = "自定义攻略"
+    title: str = Field(..., max_length=120)
+    content: str = Field(..., max_length=50000)
+    city: str = Field(default="通用", max_length=40)
+    category: str = Field(default="自定义攻略", max_length=40)
     tags: list[str] | str = Field(default_factory=list)
 
 
 class RAGSearchRequest(BaseModel):
-    query: str
-    city: str = ""
+    query: str = Field(..., max_length=300)
+    city: str = Field(default="", max_length=40)
     interests: list[str] = Field(default_factory=list)
-    weather: str = ""
+    weather: str = Field(default="", max_length=40)
     top_k: int = 5
 
 
 class POISearchRequest(BaseModel):
-    city: str
-    keyword: str
+    city: str = Field(..., max_length=40)
+    keyword: str = Field(..., max_length=60)
     limit: int = 8
 
 
-app = FastAPI(title="TravelMind Agent Demo", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+def _cors_origins() -> list[str]:
+    raw = os.getenv("TRAVELMIND_CORS_ORIGINS", "").strip()
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return [] if public_mode_enabled() else ["*"]
+
+
+_is_public = public_mode_enabled()
+app = FastAPI(
+    title="TravelMind Agent Demo",
+    version="0.1.0",
+    docs_url=None if _is_public else "/docs",
+    redoc_url=None if _is_public else "/redoc",
+    openapi_url=None if _is_public else "/openapi.json",
 )
+_allowed_origins = _cors_origins()
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=False if _allowed_origins == ["*"] or _is_public else True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
@@ -380,12 +422,35 @@ def index_v2():
     return RedirectResponse(url="/", status_code=301)
 
 
+@app.get("/api/quota")
+def get_quota(request: Request):
+    """查询当前客户端 IP 的免费配额与公开模式状态。"""
+    return quota_status_for_ip(resolve_client_ip(request))
+
+
+@app.get("/api/presets")
+def api_list_presets():
+    """返回内置 0-LLM 精选旅行示例列表。"""
+    return {"presets": list_presets()}
+
+
+@app.get("/api/presets/{preset_id}")
+def api_get_preset(preset_id: str):
+    """按 ID 返回内置精选示例的完整结构化行程（免配额体验）。"""
+    preset = get_preset(preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail="未找到指定的精选示例")
+    return preset
+
+
 @app.get("/api/tools")
 def list_tools():
+    if public_mode_enabled():
+        raise HTTPException(status_code=403, detail="公开演示模式已隐藏内部工具列表")
     try:
         agent = get_agent()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=redact_error_text(exc)) from exc
 
     return [
         {"name": tool.name, "description": tool.description}
@@ -394,7 +459,8 @@ def list_tools():
 
 
 @app.get("/api/map-static")
-def map_static(markers: str = "", path: str = "", title: str = ""):
+def map_static(request: Request, markers: str = "", path: str = "", title: str = ""):
+    enforce_token_bucket(request, "search")
     amap_key = get_amap_key()
     if not amap_key:
         return svg_map_placeholder("高德静态地图未配置，已显示点位示意图")
@@ -462,27 +528,37 @@ def map_static(markers: str = "", path: str = "", title: str = ""):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
-    if not request.message.strip():
+def chat(request_obj: ChatRequest, request: Request):
+    if public_mode_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "public_chat_disabled", "message": "公开演示模式已禁用全局共享对话，请使用左侧行程规划功能。"},
+        )
+    if not request_obj.message.strip():
         raise HTTPException(status_code=400, detail="message 不能为空")
 
+    enforce_token_bucket(request, "refine")
     try:
         agent = get_agent()
-        return agent.run(request.message.strip())
+        return agent.run(request_obj.message.strip())
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/multi-agent-chat", response_model=ChatResponse)
-def multi_agent_chat(request: ChatRequest):
-    if not request.message.strip():
+def multi_agent_chat(request_obj: ChatRequest, request: Request):
+    if not request_obj.message.strip():
         raise HTTPException(status_code=400, detail="message 不能为空")
 
+    client_ip = enforce_token_bucket(request, "refine")
+    debited_scopes, quota_day = acquire_refine_quota(client_ip)
     try:
         planner = get_multi_agent_planner()
-        return planner.run(request.message.strip())
+        return planner.run(request_obj.message.strip())
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 def _persist_plan_snapshot(plan: dict, *, changed_only: bool = False) -> None:
@@ -495,52 +571,76 @@ def _persist_plan_snapshot(plan: dict, *, changed_only: bool = False) -> None:
         persistence.save_plan_snapshot(
             str(plan["plan_id"]), int(plan.get("version") or 0), plan
         )
-        hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
-        if hints:
-            persistence.save_learned_hints([str(item) for item in hints])
+        # 公开模式下禁止把单访客 learnedHints 写入全局共享表，避免多用户污染。
+        if not public_mode_enabled():
+            hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
+            if hints:
+                persistence.save_learned_hints([str(item) for item in hints])
     except Exception:  # noqa: BLE001 - 持久化是旁路
         return
 
 
 @app.post("/api/plan")
-def plan_trip(request: PlanRequest):
+def plan_trip(request_obj: PlanRequest, request: Request):
+    client_ip = enforce_token_bucket(request, "plan")
+    debited_scopes, quota_day = acquire_plan_quota(client_ip)
+    sem = get_concurrency_guard().try_acquire(timeout=1.5)
+    if sem is None:
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "server_busy", "message": "当前同时规划的访客较多，请几秒后再试。"},
+            headers={"Retry-After": "5"},
+        )
     try:
         planner = get_structured_planner()
-        if hasattr(request, "model_dump"):
-            payload = request.model_dump()
+        if hasattr(request_obj, "model_dump"):
+            payload = request_obj.model_dump()
         else:
-            payload = request.dict()
+            payload = request_obj.dict()
         plan = planner.run(payload)
         _persist_plan_snapshot(plan)
         return plan
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
+    finally:
+        sem.release()
 
 
 @app.post("/api/refine-plan")
-def refine_plan(request: RefinePlanRequest):
-    if not request.message.strip():
+def refine_plan(request_obj: RefinePlanRequest, request: Request):
+    if not request_obj.message.strip():
         raise HTTPException(status_code=400, detail="message 不能为空")
     if os.getenv("TRAVELMIND_REFINE", "on").strip().lower() in {"off", "0", "false", "no"}:
         raise HTTPException(status_code=503, detail="结构化追问已通过 TRAVELMIND_REFINE=off 关闭")
 
     required = ["preferences", "intercity_transport", "local_transport", "hotels", "pois", "weather", "itinerary_days"]
-    missing = [key for key in required if not request.plan.get(key)]
+    missing = [key for key in required if not request_obj.plan.get(key)]
     if missing:
         raise HTTPException(status_code=400, detail=f"计划缺少必要字段：{', '.join(missing)}")
 
+    client_ip = enforce_token_bucket(request, "refine")
+    debited_scopes, quota_day = acquire_refine_quota(client_ip)
     try:
         planner = get_structured_planner()
-        result = planner.refine_plan(request.plan, request.message.strip())
+        result = planner.refine_plan(request_obj.plan, request_obj.message.strip())
         if isinstance(result, dict) and result.get("status") == "ok" and result.get("changed"):
             _persist_plan_snapshot(result.get("plan") or {})
+        elif isinstance(result, dict) and result.get("status") == "failed" and result.get("llm_status") == "call_failed":
+            if debited_scopes:
+                get_quota_store().refund(debited_scopes, quota_date=quota_day)
         return result
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/plan-async")
-def plan_trip_async(request: PlanAsyncRequest):
+def plan_trip_async(request_obj: PlanAsyncRequest, request: Request):
     """异步规划入口（Phase 5）：立即返回 task_id，进度经 SSE 事件流消费。
 
     幂等：同一 clientRequestId 在 running/done 状态下直接返回已有 task_id，
@@ -551,15 +651,30 @@ def plan_trip_async(request: PlanAsyncRequest):
     if not persistence.persistence_enabled():
         raise HTTPException(status_code=503, detail="异步任务已通过 TRAVELMIND_PERSISTENCE=off 关闭")
 
-    request_id = str(request.clientRequestId or "").strip()
+    request_id = str(request_obj.clientRequestId or "").strip()
     if request_id:
         existing = persistence.get_task_by_request(request_id)
         if existing and existing["status"] in {"running", "done"}:
             return {"task_id": existing["task_id"], "replayed": True}
 
-    payload = request.model_dump()
+    client_ip = enforce_token_bucket(request, "plan")
+    debited_scopes, quota_day = acquire_plan_quota(client_ip)
+    sem = get_concurrency_guard().try_acquire(timeout=1.0)
+    if sem is None:
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "server_busy", "message": "当前同时规划的访客较多，请几秒后再试。"},
+            headers={"Retry-After": "5"},
+        )
+
+    payload = request_obj.model_dump()
     task_id = f"task-{uuid4().hex[:12]}"
     if not persistence.create_task(task_id, request_id or task_id):
+        sem.release()
+        if debited_scopes:
+            get_quota_store().refund(debited_scopes, quota_date=quota_day)
         existing = persistence.get_task_by_request(request_id or task_id)
         if existing:
             return {"task_id": existing["task_id"], "replayed": True}
@@ -580,17 +695,21 @@ def plan_trip_async(request: PlanAsyncRequest):
             # 客户端收到 done 后立刻查 /api/task 必须能拿到 plan（否则会误报快照不可用）。
             plan_id = str(plan.get("plan_id") or "")
             persistence.save_plan_snapshot(plan_id, int(plan.get("version") or 0), plan)
-            hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
-            if hints:
-                persistence.save_learned_hints([str(item) for item in hints])
+            if not public_mode_enabled():
+                hints = ((plan.get("preferences") or {}).get("preferenceProfile") or {}).get("learnedHints") or []
+                if hints:
+                    persistence.save_learned_hints([str(item) for item in hints])
             persistence.mark_task(task_id, "done", plan_id=plan_id)
             persistence.append_event(task_id, next(seq), "done", {"plan_id": plan.get("plan_id")})
         except Exception as exc:  # noqa: BLE001 - 任务级错误以 error 事件与任务状态呈现
-            message = str(exc)[:300]
+            if debited_scopes:
+                get_quota_store().refund(debited_scopes, quota_date=quota_day)
+            message = redact_error_text(exc)[:300]
             persistence.mark_task(task_id, "error", error=message)
             persistence.append_event(task_id, next(seq), "error", {"message": message})
         finally:
             planner._progress.callback = None
+            sem.release()
 
     threading.Thread(target=runner, daemon=True, name=f"plan-{task_id}").start()
     return {"task_id": task_id, "replayed": False}
@@ -660,53 +779,56 @@ def list_rag_docs():
     try:
         return get_rag_service().list_documents()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/rag/docs")
-def add_rag_doc(request: RAGDocRequest):
+def add_rag_doc(request_obj: RAGDocRequest, request: Request):
+    require_admin_if_public(request)
     try:
         doc = get_rag_service().add_custom_document(
-            title=request.title,
-            content=request.content,
-            city=request.city,
-            category=request.category,
-            tags=request.tags,
+            title=request_obj.title,
+            content=request_obj.content,
+            city=request_obj.city,
+            category=request_obj.category,
+            tags=request_obj.tags,
         )
         return {"ok": True, "document": doc, "stats": get_rag_service().list_documents()}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=redact_error_text(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.delete("/api/rag/docs/{doc_id}")
-def delete_rag_doc(doc_id: str):
+def delete_rag_doc(doc_id: str, request: Request):
+    require_admin_if_public(request)
     try:
         deleted = get_rag_service().delete_custom_document(doc_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="未找到指定自定义攻略文档")
         return {"ok": True, "doc_id": doc_id, "stats": get_rag_service().list_documents()}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=redact_error_text(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/rag/search")
-def search_rag(request: RAGSearchRequest):
-    if not request.query.strip():
+def search_rag(request_obj: RAGSearchRequest, request: Request):
+    if not request_obj.query.strip():
         raise HTTPException(status_code=400, detail="query 不能为空")
+    enforce_token_bucket(request, "search")
     try:
         rag = get_rag_service()
         hits = rag.retrieve(
-            request.query.strip(),
-            city=request.city.strip(),
-            interests=request.interests,
-            weather=request.weather.strip(),
-            top_k=max(1, min(int(request.top_k or 5), 10)),
+            request_obj.query.strip(),
+            city=request_obj.city.strip(),
+            interests=request_obj.interests,
+            weather=request_obj.weather.strip(),
+            top_k=max(1, min(int(request_obj.top_k or 5), 10)),
         )
         return {
             "retrieval_mode": hits[0]["retrieval_mode"] if hits else rag.retrieval_mode,
@@ -714,26 +836,30 @@ def search_rag(request: RAGSearchRequest):
             "hits": hits,
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/poi/search")
-def search_poi_for_editor(request: POISearchRequest):
-    if not request.keyword.strip():
+def search_poi_for_editor(request_obj: POISearchRequest, request: Request):
+    if not request_obj.keyword.strip():
         raise HTTPException(status_code=400, detail="keyword 不能为空")
+    enforce_token_bucket(request, "search")
     try:
         planner = get_structured_planner()
         return planner.search_poi_by_keyword(
-            city=request.city.strip() or "深圳",
-            keyword=request.keyword.strip(),
-            limit=request.limit,
+            city=request_obj.city.strip() or "深圳",
+            keyword=request_obj.keyword.strip(),
+            limit=request_obj.limit,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=redact_error_text(exc)) from exc
 
 
 @app.post("/api/reset")
 def reset():
+    if public_mode_enabled():
+        # 公开模式下只清空前端本地状态即可，绝不清空服务端全局单例历史。
+        return {"ok": True, "public_mode": True}
     agent = get_agent()
     agent.conversation_history.clear()
     return {"ok": True}

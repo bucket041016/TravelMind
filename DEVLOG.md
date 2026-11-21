@@ -6,6 +6,34 @@
 
 ---
 
+## [2026-11-21 11:08] 公开免登录站限流防刷与安全加固改造
+
+### 意图
+- 为将 TravelMind 上线成“公开免登录 AI 旅行规划站”补齐生产级防护：落实现实可行且零额外中间件依赖的网关 + 应用层双层限流（每 IP 每日免费规划 3 次 + 突发令牌桶 + 全站日熔断 + 并发信号量）、0-LLM 精选预设示例秒开，并彻底修复源码中的权限、多用户状态串台、密钥泄露与高德锁阻塞问题。
+
+### 改动清单
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `sync/security.py` | 新增 | 公开模式与限流 Feature Flag、可信代理防伪造 IP 提取、`TokenBucketLimiter`、`DailyQuotaStore`（SQLite 原子预扣与异常退还）、`ConcurrencyGuard`、统一异常脱敏 `redact_error_text` 与管理员口令校验 |
+| `sync/presets.py` | 新增 | 内置 2 套完整结构化精选行程快照（广州->深圳 2 天、成都 3 天），0 LLM 消耗秒开预览与编辑 |
+| `sync/travel_web_app.py` | 修改 | 接入令牌桶/日配额/并发控制与幂等不重扣；公开模式保护 `/api/rag/docs` 写删、禁用共享 `/api/chat`、隔离全局 `learnedHints`、收紧 CORS 与隐藏 Swagger、增加字段 `max_length` 限制与 `/api/quota`、`/api/presets` 接口 |
+| `sync/fastmcp_server_streamhttp.py` | 修改 | 重构 `_amap_get` 锁粒度（睡眠与网络请求移出全局锁）、新增 `_sanitize_error` 屏蔽密钥、加固 `write_itinerary_file` 文件名与公开模式写禁、默认监听改为 `127.0.0.1` |
+| `sync/knowledge/local_poi_store.py` | 修改 | 统一 `_query_ro` 查询并在只读 WAL 目录报错时自动回退 `mode=ro&immutable=1` |
+| `web/index.html`、`web/app.js`、`web/styles.css` | 修改 | 顶栏配额徽标、首页精选示例入口、429/403 友好中文提示解析、公开模式 RAG 管理员口令输入与移除阻塞式 Google Fonts 外链 |
+| `deploy/nginx.conf.example`、`.env.example` | 新增/修改 | 新增带 `limit_req`/`limit_conn` 和 SSE 反代配置的 Nginx 参考模板，补充公开站环境变量说明 |
+| `tests/test_security_and_ratelimit.py` | 新增 | 9 项离线单测覆盖令牌桶、每 IP 日配额/退还/熔断、幂等不重扣、防 IP 伪造、公开模式鉴权、密钥脱敏、预设接口与只读 SQLite 回退 |
+
+### 验证
+- [x] `py_compile`（sync/async/tests 全量）与 `node --check web/app.js` 通过
+- [x] 全量单元测试 **271 / 271** 通过（原有 262 项 + 新增 9 项 `tests/test_security_and_ratelimit.py`）
+- [x] 离线评测与发布质量门（`tests.evals.release_gate`）通过
+- [ ] Playwright E2E（本机 `D:\TravelMind` 尚未执行 `npm install`，本次未运行）
+
+### 备注
+- `TRAVELMIND_PUBLIC_MODE` 与 `TRAVELMIND_RATE_LIMIT` 默认保持 `off`，线上生产 `.env` 开启为 `on` 即可生效，本地开发与既有测试零回归。
+
+---
+
 ## [2026-11-20 23:16] 补采 30 城交通枢纽、生成价格与片区画像并扩充 6 城策展知识库
 
 ### 意图

@@ -349,9 +349,31 @@ _AMAP_LAST_REQUEST_AT = 0.0
 _AMAP_QPS_BACKOFF_SECONDS = (0.8, 1.6, 3.2)
 
 
+_SECRET_ERROR_PATTERNS = (
+    (re.compile(r"sk-[A-Za-z0-9]{12,}"), "sk-***"),
+    (re.compile(r"(?i)((?:[?&]|\b)key=)[^&\s\"']+"), r"\1***"),
+    (re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;\"']+"), r"\1***"),
+    (re.compile(r"(?i)(token\s*[:=]\s*)[^\s,;\"']+"), r"\1***"),
+)
+
+
+def _sanitize_error(exc: object) -> str:
+    """脱敏异常信息中的 API Key 与令牌，避免随工具返回透传给前端或 LLM。"""
+    text = str(exc or "")
+    for pattern, replacement in _SECRET_ERROR_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def _is_public_mode() -> bool:
+    return str(os.getenv("TRAVELMIND_PUBLIC_MODE", "off")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _sanitize_filename(filename: str) -> str:
-    safe_name = re.sub(r"[^\w\-.]+", "_", filename.strip(), flags=re.UNICODE)
-    return safe_name or f"itinerary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    safe_name = re.sub(r"[^\w\-.]+", "_", filename.strip(), flags=re.UNICODE).lstrip(".")
+    if not safe_name or safe_name in {".", ".."}:
+        return f"itinerary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    return safe_name
 
 
 def _get_amap_key() -> str:
@@ -417,15 +439,16 @@ def _is_amap_qps_error(info: str) -> bool:
     return "QPS" in info_upper or "CUQPS" in info_upper
 
 
-def _wait_for_amap_slot_locked() -> None:
+def _reserve_amap_wait_seconds() -> float:
+    """在短锁内预约下一次允许请求的时间槽，在锁外休眠以防阻塞并发缓存命中。"""
     global _AMAP_LAST_REQUEST_AT
 
     min_interval = _get_env_float("AMAP_MIN_REQUEST_INTERVAL_SECONDS", 0.45)
-    now = time.monotonic()
-    wait_seconds = min_interval - (now - _AMAP_LAST_REQUEST_AT)
-    if wait_seconds > 0:
-        time.sleep(wait_seconds)
-    _AMAP_LAST_REQUEST_AT = time.monotonic()
+    with _AMAP_REQUEST_LOCK:
+        now = time.monotonic()
+        target_at = max(now, _AMAP_LAST_REQUEST_AT + min_interval)
+        _AMAP_LAST_REQUEST_AT = target_at
+    return max(0.0, target_at - now)
 
 
 def _amap_get(path: str, params: dict) -> dict:
@@ -439,39 +462,48 @@ def _amap_get(path: str, params: dict) -> dict:
 
     with _AMAP_REQUEST_LOCK:
         cached = _get_cached_amap_response(cache_key, time.monotonic())
+    if cached is not None:
+        return cached
+
+    last_error = ""
+    for attempt in range(attempts):
+        wait_seconds = _reserve_amap_wait_seconds()
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+        # 并发等待期间可能已有前序请求写入缓存，发 HTTP 前再检查一次
+        with _AMAP_REQUEST_LOCK:
+            cached = _get_cached_amap_response(cache_key, time.monotonic())
         if cached is not None:
             return cached
 
-        last_error = ""
-        for attempt in range(attempts):
-            _wait_for_amap_slot_locked()
-
-            try:
-                response = requests.get(
-                    f"{AMAP_API_BASE}{path}",
-                    params={**params, "key": key, "output": "json"},
-                    timeout=20,
-                )
-                response.raise_for_status()
-                data = response.json()
-            except Exception as exc:
-                last_error = str(exc)
-                if attempt < attempts - 1:
-                    time.sleep(_AMAP_QPS_BACKOFF_SECONDS[min(attempt, len(_AMAP_QPS_BACKOFF_SECONDS) - 1)])
-                    continue
-                raise
-
-            if str(data.get("status", "1")) == "1":
-                _store_amap_response(cache_key, data)
-                return deepcopy(data)
-
-            info = str(data.get("info") or data.get("infocode") or "未知错误")
-            last_error = info
-            if _is_amap_qps_error(info) and attempt < attempts - 1:
+        try:
+            response = requests.get(
+                f"{AMAP_API_BASE}{path}",
+                params={**params, "key": key, "output": "json"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            last_error = _sanitize_error(exc)
+            if attempt < attempts - 1:
                 time.sleep(_AMAP_QPS_BACKOFF_SECONDS[min(attempt, len(_AMAP_QPS_BACKOFF_SECONDS) - 1)])
                 continue
+            raise RuntimeError(f"高德接口请求失败：{last_error}") from None
 
-            raise RuntimeError(f"高德 API 调用失败：{info}")
+        if str(data.get("status", "1")) == "1":
+            with _AMAP_REQUEST_LOCK:
+                _store_amap_response(cache_key, data)
+            return deepcopy(data)
+
+        info = _sanitize_error(data.get("info") or data.get("infocode") or "未知错误")
+        last_error = info
+        if _is_amap_qps_error(info) and attempt < attempts - 1:
+            time.sleep(_AMAP_QPS_BACKOFF_SECONDS[min(attempt, len(_AMAP_QPS_BACKOFF_SECONDS) - 1)])
+            continue
+
+        raise RuntimeError(f"高德 API 调用失败：{info}")
 
     raise RuntimeError(f"高德 API 调用失败：{last_error or '未知错误'}")
 
@@ -836,7 +868,7 @@ def get_weather(city: str, date: str):
         if _get_amap_key():
             return _get_weather_from_amap(city, date)
     except Exception as amap_error:
-        amap_error_text = str(amap_error)
+        amap_error_text = _sanitize_error(amap_error)
     else:
         amap_error_text = ""
 
@@ -880,7 +912,7 @@ def get_weather(city: str, date: str):
     except Exception as e:
         fallback_note = f"高德天气失败：{amap_error_text}；" if amap_error_text else ""
         return (
-            f"{city}{date}天气暂时无法实时获取：{fallback_note}备用天气源失败：{e}。"
+            f"{city}{date}天气暂时无法实时获取：{fallback_note}备用天气源失败：{_sanitize_error(e)}。"
             "建议出发前再次确认天气预警；短途出行可准备雨具、防晒和 1 小时机动时间。"
         )
 
@@ -906,7 +938,7 @@ def amap_geocode(address: str, city: str = "") -> str:
             f"adcode：{geocode.get('adcode', '未知')}。"
         )
     except Exception as e:
-        return f"高德地理编码失败：{e}"
+        return f"高德地理编码失败：{_sanitize_error(e)}"
 
 
 @mcp.tool()
@@ -981,7 +1013,7 @@ def amap_plan_routes(
                 else:
                     sections.append(f"\n【{mode_labels.get(mode, mode)}】高德未返回可用路线。")
             except Exception as route_error:
-                sections.append(f"\n【{mode_labels.get(mode, mode)}】查询失败：{route_error}")
+                sections.append(f"\n【{mode_labels.get(mode, mode)}】查询失败：{_sanitize_error(route_error)}")
 
         if "transit" in requested_modes:
             advice.append("公共交通适合不想开车、目的地靠近地铁/公交站时选择。")
@@ -996,7 +1028,7 @@ def amap_plan_routes(
 
         return "\n".join(sections)
     except Exception as e:
-        return f"高德路线规划失败：{e}"
+        return f"高德路线规划失败：{_sanitize_error(e)}"
 
 
 @mcp.tool()
@@ -1515,7 +1547,7 @@ def search_poi(city: str, preference: str = "经典景点") -> str:
     try:
         return _search_poi_with_amap(city, preference)
     except Exception as exc:
-        return _search_poi_from_local(city, preference, str(exc))
+        return _search_poi_from_local(city, preference, _sanitize_error(exc))
 
 
 def _hotel_keyword_for_level(hotel_level: str) -> str:
@@ -1626,7 +1658,7 @@ def search_hotels(city: str, hotel_level: str = "舒适", near: str = "", limit:
             ]
         )
     except Exception as exc:
-        return _search_hotels_from_local(city, hotel_level, str(exc), near, limit=limit)
+        return _search_hotels_from_local(city, hotel_level, _sanitize_error(exc), near, limit=limit)
 
 
 
@@ -1687,7 +1719,7 @@ def kb_retrieve(city: str, query: str = "", limit: int = 8) -> dict:
             "city_guide": None,
             "entries": [],
             "coverage": "none",
-            "note": f"知识库检索失败：{exc}",
+            "note": f"知识库检索失败：{_sanitize_error(exc)}",
         }
 
 
@@ -1739,7 +1771,7 @@ def search_poi_keyword(city: str, keyword: str, limit: int = 8) -> str:
             ]
         )
     except Exception as exc:
-        return _local_keyword_fallback(f"高德实时检索失败：{exc}")
+        return _local_keyword_fallback(f"高德实时检索失败：{_sanitize_error(exc)}")
 
 
 @mcp.tool()
@@ -1771,7 +1803,7 @@ def search_travel_knowledge(query: str, city: str = "", top_k: int = 4) -> str:
             )
         return "\n".join(lines)
     except Exception as exc:
-        return f"旅游攻略知识库检索失败：{exc}"
+        return f"旅游攻略知识库检索失败：{_sanitize_error(exc)}"
 
 
 @mcp.tool()
@@ -1786,19 +1818,24 @@ def write_itinerary_file(title: str, markdown_content: str, filename: str = "") 
     Returns:
         str: 文件保存路径。
     """
+    if _is_public_mode():
+        return "公开演示模式已禁用服务端本地文件写入，请在网页端直接导出 Markdown 或打印保存 PDF。"
+    content = str(markdown_content or "")
+    if len(content.encode("utf-8")) > 512 * 1024:
+        return "行程文件过大（超过 512KB 上限），已拒绝写入。"
     output_dir = Path(__file__).resolve().parents[1] / "outputs"
     output_dir.mkdir(exist_ok=True)
     if not filename:
         filename = f"{title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     file_path = output_dir / _sanitize_filename(filename)
-    file_path.write_text(markdown_content, encoding="utf-8")
+    file_path.write_text(content, encoding="utf-8")
     return f"行程文件已生成：{file_path}"
 
 if __name__ == "__main__":
     mcp.run(
         transport="streamable-http",
-        host="0.0.0.0",
+        host=os.getenv("MCP_HOST", "127.0.0.1"),
         port=int(os.getenv("MCP_PORT", "8098")),
         path="/my-custom-path",
-        log_level="debug",
+        log_level=os.getenv("MCP_LOG_LEVEL", "info"),
     )

@@ -1,0 +1,76 @@
+# TravelMind 公开站 Nginx 网关限流与反向代理参考配置
+# 搭配应用层 TRAVELMIND_PUBLIC_MODE=on + TRAVELMIND_RATE_LIMIT=on 使用
+
+# 1. 网关层令牌桶限速与并发连接控制（放在 http {} 块内）
+limit_req_zone $binary_remote_addr zone=tm_api_burst:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=tm_plan_submit:10m rate=6r/m;
+limit_conn_zone $binary_remote_addr zone=tm_per_ip_conn:10m;
+
+server {
+    listen 80;
+    server_name your-domain.example.com;
+
+    # 基础安全响应头
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # 限制请求体大小，防止超大 payload 攻击
+    client_max_body_size 1m;
+
+    # 单 IP 同时连接数限制（含 SSE 长连接）
+    limit_conn tm_per_ip_conn 8;
+
+    # 屏蔽敏感路径，严禁外部直连
+    location ~* ^/(\.env|\.git|data|knowledge_base|outputs|sync|tests) {
+        return 404;
+    }
+
+    # 静态资源缓存
+    location /static/ {
+        proxy_pass http://127.0.0.1:8010/static/;
+        proxy_set_header Host $host;
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+    }
+
+    # 规划提交接口（网关层二次令牌桶防护，配合后端每 IP 每日 3 次配额）
+    location ~ ^/api/(plan|plan-async|refine-plan|multi-agent-chat)$ {
+        limit_req zone=tm_plan_submit burst=3 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:8010;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+    }
+
+    # SSE 进度事件流（必须关闭缓冲并调大超时）
+    location /api/plan-events/ {
+        proxy_pass http://127.0.0.1:8010;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 240s;
+    }
+
+    # 其余页面与查询接口
+    location / {
+        limit_req zone=tm_api_burst burst=15 nodelay;
+        limit_req_status 429;
+
+        proxy_pass http://127.0.0.1:8010;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}

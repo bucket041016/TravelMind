@@ -9,11 +9,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import re
 import sqlite3
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOCAL_POI_DB = PROJECT_ROOT / "data" / "amap_poi_corpus.db"
@@ -105,6 +108,25 @@ def _split_terms(text: str) -> list[str]:
     return parts[:8]
 
 
+def _query_ro(path: Path, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> list[sqlite3.Row]:
+    """以只读方式查询离线 POI SQLite；只读目录上遇 WAL 权限错误时回退 immutable 模式。"""
+    for uri_suffix in ("mode=ro", "mode=ro&immutable=1"):
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(f"file:{path}?{uri_suffix}", uri=True, timeout=3.0)
+            conn.row_factory = sqlite3.Row
+            return conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as exc:
+            if uri_suffix == "mode=ro":
+                _LOGGER.warning("本地 POI 库只读打开失败，回退 immutable 模式：%s", exc)
+                continue
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
+    return []
+
+
 def has_local_corpus(db_path: Path | str | None = None) -> bool:
     return _resolve_db_path(db_path) is not None
 
@@ -114,12 +136,12 @@ def corpus_stats(db_path: Path | str | None = None) -> dict[str, Any]:
     if path is None:
         return {"available": False, "total_pois": 0, "city_count": 0}
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        total = int(conn.execute("SELECT COUNT(*) FROM pois").fetchone()[0])
-        cities = int(conn.execute("SELECT COUNT(DISTINCT city) FROM pois").fetchone()[0])
-        conn.close()
+        rows = _query_ro(path, "SELECT COUNT(*) AS total, COUNT(DISTINCT city) AS cities FROM pois")
+        total = int(rows[0]["total"]) if rows else 0
+        cities = int(rows[0]["cities"]) if rows else 0
         return {"available": total > 0, "total_pois": total, "city_count": cities, "db_path": str(path)}
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("读取本地 POI 语料库统计失败：%s", exc)
         return {"available": False, "total_pois": 0, "city_count": 0}
 
 
@@ -141,8 +163,6 @@ def search_local_pois(
     terms = _split_terms(keywords)
 
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
         sql = "SELECT * FROM pois WHERE (city = ? OR cityname LIKE ?)"
         params: list[Any] = [clean_city, f"{clean_city}%"]
         if categories:
@@ -150,9 +170,9 @@ def search_local_pois(
             sql += f" AND category IN ({placeholders})"
             params.extend(categories)
         sql += " ORDER BY COALESCE(rating, 0) DESC, name ASC LIMIT 400"
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
-    except Exception:
+        rows = _query_ro(path, sql, params)
+    except Exception as exc:
+        _LOGGER.warning("检索本地 POI 语料失败：%s", exc)
         return []
 
     if not rows:
@@ -189,15 +209,14 @@ def search_local_hotels(
     near_terms = _split_terms(near)
 
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+        rows = _query_ro(
+            path,
             "SELECT * FROM pois WHERE (city = ? OR cityname LIKE ?) AND category = 'hotel' "
             "ORDER BY COALESCE(rating, 0) DESC, name ASC LIMIT 250",
             (clean_city, f"{clean_city}%"),
-        ).fetchall()
-        conn.close()
-    except Exception:
+        )
+    except Exception as exc:
+        _LOGGER.warning("检索本地酒店语料失败：%s", exc)
         return []
 
     if not rows:
@@ -259,15 +278,14 @@ def search_local_hubs(
 
     bounded_limit = max(1, min(int(limit or 6), 15))
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+        rows = _query_ro(
+            path,
             "SELECT * FROM pois WHERE (city = ? OR cityname LIKE ?) AND category = 'transport_hub' "
             "ORDER BY name ASC LIMIT 80",
             (clean_city, f"{clean_city}%"),
-        ).fetchall()
-        conn.close()
-    except Exception:
+        )
+    except Exception as exc:
+        _LOGGER.warning("检索本地交通枢纽失败：%s", exc)
         return []
 
     filtered: list[dict[str, Any]] = []
@@ -310,14 +328,13 @@ def city_price_and_district_profile(
         return {"available": False, "city": clean_city}
 
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+        rows = _query_ro(
+            path,
             "SELECT category, adname, cost FROM pois WHERE (city = ? OR cityname LIKE ?)",
             (clean_city, f"{clean_city}%"),
-        ).fetchall()
-        conn.close()
-    except Exception:
+        )
+    except Exception as exc:
+        _LOGGER.warning("聚合本地城市价格画像失败：%s", exc)
         return {"available": False, "city": clean_city}
 
     if not rows:

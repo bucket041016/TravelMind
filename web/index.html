@@ -216,6 +216,7 @@
             <h2>把路线、地图和预算放进同一张旅行桌面</h2>
           </div>
           <div class="top-actions">
+            <span id="quotaBadge" class="quota-badge" hidden></span>
             <button id="openRagModalButton" class="ghost-button" type="button">攻略知识库</button>
             <button id="backHomeButton" class="ghost-button" type="button" hidden>返回首页</button>
             <button id="editPlanButton" class="ghost-button" type="button" hidden>编辑行程</button>
@@ -304,6 +305,10 @@
           </section>
 
           <section id="ragTabUpload" class="rag-tab-panel" hidden>
+            <div id="ragAdminNotice" class="rag-admin-notice" hidden>
+              <span>公开演示模式下，公共攻略库写操作需管理员口令；普通访客可正常使用「已入库攻略」与「检索测试」。</span>
+              <input id="ragAdminTokenInput" type="password" placeholder="管理员口令（X-Admin-Token，可选）" autocomplete="off" />
+            </div>
             <form id="ragUploadForm" class="modal-form">
               <div class="form-grid two">
                 <label>

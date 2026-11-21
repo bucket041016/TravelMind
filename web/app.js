@@ -29,7 +29,10 @@ const exportMenu = document.querySelector("#exportMenu");
 const navLinks = document.querySelectorAll("[data-scroll-target]");
 const modifyPanel = document.querySelector(".modify-panel");
 const openRagModalButton = document.querySelector("#openRagModalButton");
+const quotaBadge = document.querySelector("#quotaBadge");
 const ragModal = document.querySelector("#ragModal");
+const ragAdminNotice = document.querySelector("#ragAdminNotice");
+const ragAdminTokenInput = document.querySelector("#ragAdminTokenInput");
 const ragStatusLine = document.querySelector("#ragStatusLine");
 const ragDocList = document.querySelector("#ragDocList");
 const ragUploadForm = document.querySelector("#ragUploadForm");
@@ -108,6 +111,111 @@ let editingCardKey = null;
 let pickerContext = { mode: "add", dayIndex: 0, itemIndex: null };
 let latestPoiSearchItems = [];
 let dragSource = null;
+let latestQuotaStatus = null;
+const adminTokenStorageKey = "travelmind:adminToken:v1";
+
+function getAdminToken() {
+  const inputVal = String(ragAdminTokenInput?.value || "").trim();
+  if (inputVal) return inputVal;
+  try {
+    return String(sessionStorage.getItem(adminTokenStorageKey) || "").trim();
+  } catch (err) {
+    return "";
+  }
+}
+
+function getAdminTokenHeaders(baseHeaders = {}) {
+  const token = getAdminToken();
+  return token ? { ...baseHeaders, "X-Admin-Token": token } : { ...baseHeaders };
+}
+
+async function extractApiErrorMessage(response, fallbackText = "请求失败") {
+  let rawText = "";
+  try {
+    rawText = await response.text();
+  } catch (err) {
+    return `${fallbackText}（HTTP ${response.status}）`;
+  }
+  if (!rawText) return `${fallbackText}（HTTP ${response.status}）`;
+  try {
+    const parsed = JSON.parse(rawText);
+    const detail = parsed?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (detail && typeof detail === "object" && detail.message) return String(detail.message);
+    if (Array.isArray(detail) && detail.length) {
+      return detail.map((item) => item?.msg || JSON.stringify(item)).join("；");
+    }
+    if (parsed?.message) return String(parsed.message);
+  } catch (err) {
+    // 非 JSON 文本原样返回
+  }
+  return rawText;
+}
+
+function renderQuotaBadge(status) {
+  latestQuotaStatus = status || null;
+  if (ragAdminNotice) {
+    ragAdminNotice.hidden = !(status && status.public_mode && status.rag_write_protected);
+  }
+  if (!quotaBadge) return;
+  if (!status || !status.rate_limit_enabled) {
+    quotaBadge.hidden = true;
+    return;
+  }
+  quotaBadge.hidden = false;
+  const remaining = Number(status.remaining ?? 0);
+  const limit = Number(status.daily_limit ?? 3);
+  quotaBadge.classList.toggle("is-exhausted", remaining <= 0 || !status.global_available);
+  if (!status.global_available) {
+    quotaBadge.textContent = "今日全站额度已满 · 可体验精选示例";
+    quotaBadge.title = "全站每日免费规划额度已用完，可点击精选示例秒开体验";
+    return;
+  }
+  quotaBadge.textContent = `今日免费规划 ${remaining}/${limit}`;
+  quotaBadge.title = `每 IP 每日免费规划 ${limit} 次（已用 ${status.used ?? 0} 次），追问剩余 ${status.refine_remaining ?? 0}/${status.refine_limit ?? 10} 次`;
+}
+
+async function refreshQuotaStatus() {
+  try {
+    const response = await fetch("/api/quota");
+    if (!response.ok) return;
+    const status = await response.json();
+    renderQuotaBadge(status);
+  } catch (err) {
+    // 静默忽略，确保离线/E2E 零控制台错误
+  }
+}
+
+async function loadPresetPlan(presetId) {
+  try {
+    const response = await fetch(`/api/presets/${encodeURIComponent(presetId)}`);
+    if (!response.ok) {
+      throw new Error(await extractApiErrorMessage(response, "加载精选示例失败"));
+    }
+    const payload = await response.json();
+    const plan = payload?.plan;
+    if (!plan) throw new Error("精选示例数据为空");
+    currentPlanData = normalizePlanData(clonePlan(plan));
+    currentMarkdown = plan.markdown || buildMarkdownFromPlan(currentPlanData);
+    budgetAdjusted = false;
+    editMode = false;
+    clearEditHistory();
+    if (editPlanButton) editPlanButton.textContent = "编辑行程";
+    renderPlanResult(currentPlanData);
+    renderMarkdownResult(currentMarkdown);
+    setActiveTab("result", { skipSave: true });
+    setTrace([], { skipSave: true });
+    appendMessage(
+      "assistant",
+      `已为您免额度秒开精选示例「${payload.title || presetId}」。支持直接点击上方「编辑行程」拖拽调序、加减天数或导出 PDF。`,
+      { skipSave: true },
+    );
+    saveSessionSnapshot();
+    scrollWorkspaceToTop();
+  } catch (error) {
+    appendMessage("assistant", `请求失败：${error.message}`, { skipSave: true });
+  }
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -740,6 +848,10 @@ function renderEmptyResult() {
         <span><b>01</b>多路线对比</span>
         <span><b>02</b>每日节奏编排</span>
         <span><b>03</b>天气与预算联动</span>
+      </div>
+      <div class="preset-demo-row" aria-label="免额度精选示例">
+        <button class="preset-chip" type="button" data-preset-id="gz-sz-2d">免额度体验：广州 → 深圳 2 天</button>
+        <button class="preset-chip" type="button" data-preset-id="cd-3d">免额度体验：成都 3 天慢生活</button>
       </div>
     </div>
   `;
@@ -2958,6 +3070,9 @@ async function sendMessage(message, options = {}) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ plan: currentPlanData, message }),
         });
+        if (refineResponse.status === 429 || refineResponse.status === 403) {
+          throw new Error(await extractApiErrorMessage(refineResponse, "追问请求被限制"));
+        }
         if (refineResponse.ok) {
           const data = await refineResponse.json();
           if (data.status === "ok" && data.changed) {
@@ -2984,6 +3099,9 @@ async function sendMessage(message, options = {}) {
           // status === "failed"：保持未处理，回退旧链路
         }
       } catch (refineError) {
+        if (/限|额度|次数|用完|频繁|禁用/.test(String(refineError?.message || ""))) {
+          throw refineError;
+        }
         // refine 不可用（网络/503），回退旧链路
       }
     }
@@ -2996,8 +3114,7 @@ async function sendMessage(message, options = {}) {
       });
 
       if (!legacyResponse.ok) {
-        const text = await legacyResponse.text();
-        throw new Error(text);
+        throw new Error(await extractApiErrorMessage(legacyResponse, "请求失败"));
       }
 
       const data = await legacyResponse.json();
@@ -3022,6 +3139,7 @@ async function sendMessage(message, options = {}) {
     }
     saveSessionSnapshot();
     scrollFollowupToBottom();
+    refreshQuotaStatus();
   }
 }
 
@@ -3171,7 +3289,7 @@ async function sendPlanAsync(payload) {
   }
   if (!submit.ok) {
     if ([404, 405, 501, 503].includes(submit.status)) return "fallback";
-    throw new Error(await submit.text());
+    throw new Error(await extractApiErrorMessage(submit, "提交规划失败"));
   }
   const submitData = await submit.json();
   saveActiveTask({ taskId: submitData.task_id, requestId });
@@ -3196,8 +3314,7 @@ async function sendPlanSync(payload) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text);
+      throw new Error(await extractApiErrorMessage(response, "规划请求失败"));
     }
     return await response.json();
   } finally {
@@ -3259,6 +3376,7 @@ async function sendPlan(payload) {
       planButton.disabled = false;
       planButton.textContent = "开始规划";
     }
+    refreshQuotaStatus();
   }
 }
 
@@ -3298,6 +3416,7 @@ async function restoreActiveTask() {
       planButton.disabled = false;
       planButton.textContent = "开始规划";
     }
+    refreshQuotaStatus();
   }
 }
 
@@ -3825,12 +3944,20 @@ document.addEventListener("click", (event) => {
     setPickerTab(pickerTabBtn.dataset.pickerTab);
     return;
   }
+  const presetBtn = event.target.closest("[data-preset-id]");
+  if (presetBtn) {
+    loadPresetPlan(presetBtn.dataset.presetId);
+    return;
+  }
   const delRagBtn = event.target.closest("[data-delete-rag-doc]");
   if (delRagBtn) {
     const docId = delRagBtn.dataset.deleteRagDoc;
-    fetch(`/api/rag/docs/${encodeURIComponent(docId)}`, { method: "DELETE" })
-      .then((res) => {
-        if (!res.ok) throw new Error("删除失败");
+    fetch(`/api/rag/docs/${encodeURIComponent(docId)}`, {
+      method: "DELETE",
+      headers: getAdminTokenHeaders(),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await extractApiErrorMessage(res, "删除失败"));
         return refreshRagDocs();
       })
       .catch((err) => {
@@ -3890,6 +4017,21 @@ if (ragDocFile) {
   });
 }
 
+if (ragAdminTokenInput) {
+  try {
+    ragAdminTokenInput.value = sessionStorage.getItem(adminTokenStorageKey) || "";
+  } catch (err) {
+    /* ignore */
+  }
+  ragAdminTokenInput.addEventListener("input", () => {
+    try {
+      sessionStorage.setItem(adminTokenStorageKey, ragAdminTokenInput.value.trim());
+    } catch (err) {
+      /* ignore */
+    }
+  });
+}
+
 if (ragUploadForm) {
   ragUploadForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3898,7 +4040,7 @@ if (ragUploadForm) {
     try {
       const response = await fetch("/api/rag/docs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAdminTokenHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title: ragDocTitle.value.trim(),
           city: ragDocCity.value.trim() || "通用",
@@ -3906,7 +4048,7 @@ if (ragUploadForm) {
           content: ragDocContent.value.trim(),
         }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await extractApiErrorMessage(response, "保存失败"));
       ragUploadForm.reset();
       if (ragDocCity) ragDocCity.value = currentPlanData?.preferences?.destinationCity || "通用";
       if (ragUploadMessage) ragUploadMessage.textContent = "攻略已成功入库！后续规划与检索将自动生效。";
@@ -4093,4 +4235,5 @@ if (!restoreSessionSnapshot()) {
   renderEmptyResult();
 }
 if (toolList && !toolList.closest("[hidden]")) loadTools();
+refreshQuotaStatus();
 restoreActiveTask();
